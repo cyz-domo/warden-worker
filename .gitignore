@@ -4,3 +4,4 @@ node_modules
 vaultwarden-main
 keyguard-app-master
 log
+.DS_Store

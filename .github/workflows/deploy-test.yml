@@ -1,0 +1,43 @@
+name: Deploy test
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: wasm32-unknown-unknown
+      - name: Install worker-build
+        run: cargo install worker-build --locked
+      - name: Verify versions
+        run: ./scripts/verify-version.sh
+      - name: Build Worker
+        run: worker-build --release
+      - name: Apply test migrations
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 migrations apply vault1 --remote --config wrangler.test.jsonc
+      - name: Deploy test Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config wrangler.test.jsonc
+      - name: Smoke test
+        env:
+          TEST_BASE_URL: ${{ secrets.TEST_BASE_URL }}
+        if: ${{ env.TEST_BASE_URL != '' }}
+        run: ./scripts/smoke-test.sh "$TEST_BASE_URL"

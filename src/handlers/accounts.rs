@@ -122,20 +122,33 @@ pub async fn register(
         .first(Some("user_count"))
         .await
         .map_err(|_| AppError::Database)?;
-    let user_count = user_count.unwrap_or(0);
-    if user_count == 0 {
+    let _user_count = user_count.unwrap_or(0);
+    let signups_allowed = env
+        .secret("SIGNUPS_ALLOWED")
+        .ok()
+        .and_then(|secret| secret.to_string().parse::<bool>().ok())
+        .unwrap_or(false);
+    if !signups_allowed {
+        return Err(AppError::Unauthorized("Signups are disabled".to_string()));
+    }
+
+    let allowlist_only = env
+        .secret("SIGNUPS_ALLOWLIST_ONLY")
+        .ok()
+        .and_then(|secret| secret.to_string().parse::<bool>().ok())
+        .unwrap_or(true);
+    if allowlist_only {
         let allowed_emails = env
             .secret("ALLOWED_EMAILS")
-            .map_err(|_| AppError::Internal)?;
-        let allowed_emails = allowed_emails
-            .as_ref()
-            .as_string()
-            .ok_or_else(|| AppError::Internal)?;
+            .map_err(|_| AppError::Internal)?
+            .to_string();
+        let requested_email = payload.email.trim().to_lowercase();
         if allowed_emails
-            .split(",")
-            .all(|email| email.trim() != payload.email)
+            .split(',')
+            .map(|email| email.trim().to_lowercase())
+            .all(|email| email != requested_email)
         {
-            return Err(AppError::Unauthorized("Not allowed to signup".to_string()));
+            return Err(AppError::Unauthorized("Email is not allowlisted".to_string()));
         }
     }
     let now = Utc::now().to_rfc3339();
@@ -143,7 +156,7 @@ pub async fn register(
         id: Uuid::new_v4().to_string(),
         name: payload.name,
         email: payload.email.to_lowercase(),
-        email_verified: false,
+        email_verified: true,
         master_password_hash: payload.master_password_hash,
         master_password_hint: payload.master_password_hint,
         key: payload.user_symmetric_key,
@@ -323,6 +336,11 @@ fn to_js_val<T: Into<JsValue>>(val: Option<T>) -> JsValue {
 }
 
 #[worker::send]
-pub async fn send_verification_email() -> String {
-    "fixed-token-to-mock".to_string()
+pub async fn send_verification_email() -> Json<String> {
+    Json("local-registration-token".to_string())
+}
+
+#[worker::send]
+pub async fn verification_email_clicked() -> Json<Value> {
+    Json(json!({}))
 }

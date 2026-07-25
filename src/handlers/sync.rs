@@ -1,5 +1,5 @@
 use axum::{extract::State, Json};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use worker::Env;
 
@@ -77,6 +77,20 @@ pub async fn get_sync_data(
         .map(|s| send_to_json(&s))
         .collect::<Vec<_>>();
 
+    let user_decryption = json!({
+        "masterPasswordUnlock": {
+            "kdf": {
+                "kdfType": user.kdf_type,
+                "iterations": user.kdf_iterations,
+                "memory": null,
+                "parallelism": null
+            },
+            "masterKeyEncryptedUserKey": user.key,
+            "masterKeyWrappedUserKey": user.key,
+            "salt": user.email
+        }
+    });
+
     let time = chrono::DateTime::parse_from_rfc3339(&user.created_at)
         .map_err(|_| AppError::Internal)?
         .to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
@@ -101,9 +115,12 @@ pub async fn get_sync_data(
     let response = SyncResponse {
         profile,
         folders,
+        collections: Vec::new(),
+        policies: Vec::new(),
         ciphers,
         sends,
         domains: serde_json::Value::Null, // Ignored for basic implementation
+        user_decryption,
         object: "sync".to_string(),
     };
 

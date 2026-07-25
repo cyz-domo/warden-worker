@@ -26,6 +26,10 @@ pub fn api_router(env: Env) -> Router {
             "/identity/accounts/register/send-verification-email",
             post(accounts::send_verification_email),
         )
+        .route(
+            "/identity/accounts/register/verification-email-clicked",
+            post(accounts::verification_email_clicked),
+        )
         .route("/api/accounts/profile", get(accounts::profile))
         .route("/api/accounts/revision-date", get(accounts::revision_date))
         .route("/api/devices", get(devices::get_devices))

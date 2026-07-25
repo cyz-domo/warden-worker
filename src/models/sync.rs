@@ -11,7 +11,6 @@ pub struct Profile {
     pub master_password_hint: Option<String>,
     #[serde(rename = "securityStamp")]
     pub security_stamp: String,
-    #[serde(rename = "Object")]
     pub object: String,
     #[serde(rename = "premiumFromOrganization")]
     pub premium_from_organization: bool,
@@ -33,16 +32,14 @@ pub struct Profile {
 
 #[derive(Debug, Serialize)]
 pub struct SyncResponse {
-    #[serde(rename = "profile")]
     pub profile: Profile,
-    #[serde(rename = "folders")]
     pub folders: Vec<FolderResponse>,
-    #[serde(rename = "ciphers")]
+    pub collections: Vec<Value>,
+    pub policies: Vec<Value>,
     pub ciphers: Vec<Cipher>,
-    #[serde(rename = "Sends")]
     pub sends: Vec<Value>,
-    #[serde(rename = "Domains")]
     pub domains: Value,
-    #[serde(rename = "Object")]
+    #[serde(rename = "userDecryption")]
+    pub user_decryption: Value,
     pub object: String,
 }

@@ -1,0 +1,20 @@
+{
+  "name": "warden-worker-test",
+  "main": "build/index.js",
+  "compatibility_date": "2025-09-19",
+  "d1_databases": [
+    {
+      "binding": "vault1",
+      "database_name": "warden-sql-test",
+      "database_id": "1ab251f5-2e8b-413c-a49b-ef0de918018d",
+      "migrations_dir": "sql/migrations"
+    }
+  ],
+  "build": { "command": "worker-build --release" },
+  "observability": { "logs": { "enabled": true, "persist": true } },
+  "assets": {
+    "directory": "./static/web-vault",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/identity/*", "/sends/*", "/demo.html"]
+  }
+}

@@ -1,9 +1,18 @@
-use axum::{http::HeaderMap, Json};
+use axum::{extract::State, http::HeaderMap, Json};
 use chrono::Utc;
 use serde_json::{json, Value};
+use std::sync::Arc;
+use worker::Env;
+
+fn secret_bool(env: &Env, name: &str, default: bool) -> bool {
+    env.secret(name)
+        .ok()
+        .and_then(|secret| secret.to_string().parse::<bool>().ok())
+        .unwrap_or(default)
+}
 
 #[worker::send]
-pub async fn config(headers: HeaderMap) -> Json<Value> {
+pub async fn config(State(env): State<Arc<Env>>, headers: HeaderMap) -> Json<Value> {
     // let domain = crate::CONFIG.domain();
     // Official available feature flags can be found here:
     // Server (v2025.6.2): https://github.com/bitwarden/server/blob/d094be3267f2030bd0dc62106bc6871cf82682f5/src/Core/Constants.cs#L103
@@ -33,14 +42,14 @@ pub async fn config(headers: HeaderMap) -> Json<Value> {
         // We should make sure that we keep this updated when we support the new server features
         // Version history:
         // - Individual cipher key encryption: 2024.2.0
-        "version": "2025.12.0",
+        "version": option_env!("WARDEN_VERSION").unwrap_or("unknown"),
         "gitHash": "25cf6119-dirty",
         "server": {
           "name": "Vaultwarden",
           "url": "https://github.com/dani-garcia/vaultwarden"
         },
         "settings": {
-            "disableUserRegistration": true,
+            "disableUserRegistration": !secret_bool(&env, "SIGNUPS_ALLOWED", false),
         },
         "environment": {
           "vault": domain,
@@ -74,7 +83,7 @@ pub async fn alive() -> Json<String> {
 
 #[worker::send]
 pub async fn version() -> Json<&'static str> {
-    Json("2025.12.0")
+    Json(option_env!("WARDEN_VERSION").unwrap_or("unknown"))
 }
 
 #[worker::send]

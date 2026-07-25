@@ -92,6 +92,18 @@ wrangler d1 execute vault1 --local --file=sql/schema_full.sql
 wrangler dev
 ```
 
+## 测试与生产发布
+
+项目提供两个独立配置：`wrangler.test.jsonc` 和 `wrangler.production.jsonc`。当前测试 D1 已创建，ID 为 `1ab251f5-2e8b-413c-a49b-ef0de918018d`；生产配置仍需填入生产 D1 ID。不要让两个环境共用数据库。
+
+GitHub Actions 需要配置 `test` 与 `production` Environments，并分别设置 Cloudflare API Token、Account ID 和可选的 `TEST_BASE_URL`/`PRODUCTION_BASE_URL`。推送到 `develop` 会自动部署测试环境；生产环境通过 `Deploy production` workflow 手动选择 ref 发布。
+
+构建会校验 `static/web-vault/version.json` 与 `vw-version.json`，并将版本同步返回到 `/api/config` 和 `/api/version`。D1 migration 使用增量 SQL，不要在生产 workflow 中执行 `sql/schema_full.sql`。
+
+注册策略由 `SIGNUPS_ALLOWED`、`SIGNUPS_ALLOWLIST_ONLY` 和 `ALLOWED_EMAILS` 控制。测试环境使用 `SIGNUPS_ALLOWED=true`、`SIGNUPS_ALLOWLIST_ONLY=true`；生产环境可使用 `SIGNUPS_ALLOWED=true`、`SIGNUPS_ALLOWLIST_ONLY=false` 开放公开注册。
+
+首次创建空的测试或生产 D1 时，只运行对应的 `Initialize test D1`/`Initialize production D1` 手动 workflow 一次。该步骤会执行 `sql/schema_full.sql`，会清空目标数据库；数据库已有数据时禁止运行。
+
 本地可用 `.dev.vars`（Wrangler 支持）注入 secrets。
 
 ## 许可证
