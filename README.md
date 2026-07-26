@@ -79,6 +79,8 @@ wrangler d1 migrations apply vault1 --remote \
 
 ### 4. 配置管理员和 Secrets
 
+这些配置是 Cloudflare Worker 的运行时 Secrets，不会参与 Rust/WASM 构建。因此可以在本地构建之前或之后设置，但必须在第一次部署 Worker 之前完成；GitHub Actions 不会从代码仓库自动创建这些值。
+
 生产环境设置：
 
 ```bash
@@ -98,6 +100,24 @@ openssl rand -base64 32
 ```
 
 `ADMIN_EMAIL` 必须对应一个已注册用户；它不是自动创建的管理员账号。首次部署建议将 `SIGNUPS_ALLOWED=true`，先注册管理员，再访问 `https://你的域名/admin.html` 验证后台，之后按需改为 `false` 关闭注册。
+
+配置时机和用途：
+
+| 配置 | 设置时机 | 说明 |
+|---|---|---|
+| `JWT_SECRET` | 首次部署前 | 访问 JWT 签名密钥，生产环境必需 |
+| `JWT_REFRESH_SECRET` | 首次部署前 | refresh token 签名密钥，生产环境必需 |
+| `ADMIN_EMAIL` | 首次部署前 | 管理员邮箱；对应账号需要先注册 |
+| `SIGNUPS_ALLOWED` | 首次部署前 | `true` 开放注册，`false` 关闭注册 |
+| `TWO_FACTOR_ENC_KEY` | 启用 TOTP 前 | 建议首次部署前配置，避免后续更换加密方式 |
+
+如果已经完成构建但还没有设置 Secrets，可以直接设置后再执行部署，不需要重新构建：
+
+```bash
+wrangler secret put ADMIN_EMAIL --config wrangler.production.jsonc
+wrangler secret put SIGNUPS_ALLOWED --config wrangler.production.jsonc
+wrangler deploy --config wrangler.production.jsonc
+```
 
 ### 5. 注册邮箱白名单
 
@@ -162,7 +182,7 @@ curl -f https://你的域名/api/config
 
 #### 必须先配置的 Worker Secrets
 
-`ADMIN_EMAIL` 和 `SIGNUPS_ALLOWED` 不是 GitHub Actions 自动生成的变量，必须提前写入 Cloudflare 生产 Worker 的 Secrets。GitHub Actions 只负责构建和部署，不会替你创建管理员账号，也不会初始化注册策略。
+`ADMIN_EMAIL`、`SIGNUPS_ALLOWED`、`JWT_SECRET`、`JWT_REFRESH_SECRET` 和 `TWO_FACTOR_ENC_KEY` 不是 GitHub Actions 自动生成的变量，必须在 GitHub Actions 第一次生产部署前写入 Cloudflare 生产 Worker 的 Secrets。它们是运行时配置，不要求在 GitHub Actions 构建阶段提供。
 
 在本地配置生产 Worker：
 
@@ -194,6 +214,13 @@ wrangler secret put TWO_FACTOR_ENC_KEY --config wrangler.production.jsonc
 ```
 
 这些 Worker Secrets 与下面的 GitHub Actions Secrets 是两套不同的配置，不能混淆。
+
+截图中如果还看到以下旧变量，可以删除，不需要再设置：
+
+- `ALLOWED_EMAILS`：旧版邮箱配置，当前白名单由 D1 的 `registration_allowlist` 表管理。
+- `SIGNUPS_ALLOWLIST_ONLY`：旧版注册开关，当前项目不读取该变量。
+
+当前项目实际使用的是 `ADMIN_EMAIL`、`SIGNUPS_ALLOWED` 和上述 JWT/TOTP Secrets。白名单邮箱通过 `/admin.html` 写入生产 D1，不是 Cloudflare Worker 环境变量。
 
 在 GitHub 仓库的 `Settings → Environments` 中创建 `production` Environment，并添加以下 Secrets：
 
