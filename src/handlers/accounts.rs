@@ -59,6 +59,12 @@ pub struct UpdateProfileRequest {
     pub culture: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAvatarRequest {
+    pub avatar_color: Option<String>,
+}
+
 #[worker::send]
 pub async fn profile(claims: Claims, State(env): State<Arc<Env>>) -> Result<Json<Value>, AppError> {
     let db = db::get_db(&env)?;
@@ -72,6 +78,7 @@ pub async fn profile(claims: Claims, State(env): State<Arc<Env>>) -> Result<Json
     Ok(Json(json!({
         "id": user.id,
         "name": user.name,
+        "avatarColor": user.avatar_color,
         "email": user.email,
         "emailVerified": user.email_verified,
         "premium": true,
@@ -85,6 +92,37 @@ pub async fn profile(claims: Claims, State(env): State<Arc<Env>>) -> Result<Json
         "organizations": [],
         "object": "profile"
     })))
+}
+
+#[worker::send]
+pub async fn update_avatar(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Json(payload): Json<UpdateAvatarRequest>,
+) -> Result<Json<Value>, AppError> {
+    let db = db::get_db(&env)?;
+    let avatar_color = payload.avatar_color.map(|value| value.trim().to_string());
+    let avatar_color = avatar_color.filter(|value| !value.is_empty());
+    if let Some(value) = avatar_color.as_deref() {
+        let valid = value.len() == 7
+            && value.starts_with('#')
+            && value[1..]
+                .chars()
+                .all(|character| character.is_ascii_hexdigit());
+        if !valid {
+            return Err(AppError::BadRequest("Invalid avatar color".to_string()));
+        }
+    }
+    db.prepare("UPDATE users SET avatar_color = ?1, updated_at = ?2 WHERE id = ?3")
+        .bind(&[
+            avatar_color.into(),
+            Utc::now().to_rfc3339().into(),
+            claims.sub.clone().into(),
+        ])?
+        .run()
+        .await
+        .map_err(|_| AppError::Database)?;
+    profile(claims, State(env)).await
 }
 
 #[worker::send]
@@ -334,6 +372,7 @@ pub async fn register(
     let user = User {
         id: Uuid::new_v4().to_string(),
         name: payload.name,
+        avatar_color: None,
         email: payload.email.to_lowercase(),
         email_verified: true,
         master_password_hash,

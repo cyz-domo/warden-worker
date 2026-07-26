@@ -97,6 +97,7 @@ pub async fn get_sync_data(
     let profile = Profile {
         id: user.id,
         name: user.name,
+        avatar_color: user.avatar_color,
         email: user.email,
         master_password_hint: user.master_password_hint,
         security_stamp: user.security_stamp,

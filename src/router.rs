@@ -56,6 +56,7 @@ pub fn api_router(env: Env) -> Router {
             "/api/accounts/profile",
             get(accounts::profile).put(accounts::update_profile),
         )
+        .route("/api/accounts/avatar", put(accounts::update_avatar))
         .route("/api/accounts/revision-date", get(accounts::revision_date))
         .route(
             "/api/accounts/security-stamp",

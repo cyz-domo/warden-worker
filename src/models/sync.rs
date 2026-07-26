@@ -5,6 +5,8 @@ use serde_json::Value;
 #[derive(Debug, Serialize)]
 pub struct Profile {
     pub name: Option<String>,
+    #[serde(rename = "avatarColor")]
+    pub avatar_color: Option<String>,
     pub email: String,
     pub id: String,
     #[serde(rename = "masterPasswordHint")]
