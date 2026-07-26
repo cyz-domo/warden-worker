@@ -377,6 +377,18 @@ fn invalid_two_factor_response() -> Response {
         .into_response()
 }
 
+fn invalid_grant_response(message: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "error": "invalid_grant",
+            "error_description": message,
+            "message": message
+        })),
+    )
+        .into_response()
+}
+
 #[worker::send]
 pub async fn token(
     State(env): State<Arc<Env>>,
@@ -393,20 +405,22 @@ pub async fn token(
                 .password
                 .ok_or_else(|| AppError::BadRequest("Missing password".to_string()))?;
 
-            let user: Value = db
+            let user: Option<Value> = db
                 .prepare("SELECT * FROM users WHERE email = ?1")
                 .bind(&[username.to_lowercase().into()])?
                 .first(None)
                 .await
-                .map_err(|_| AppError::Unauthorized("Invalid credentials".to_string()))?
-                .ok_or_else(|| AppError::Unauthorized("Invalid credentials".to_string()))?;
+                .map_err(|_| AppError::Database)?;
+            let Some(user) = user else {
+                return Ok(invalid_grant_response("Invalid credentials"));
+            };
             let user: User = serde_json::from_value(user).map_err(|_| AppError::Internal)?;
             // Securely compare the provided hash with the stored hash
             if !constant_time_eq(
                 user.master_password_hash.as_bytes(),
                 password_hash.as_bytes(),
             ) {
-                return Err(AppError::Unauthorized("Invalid credentials".to_string()));
+                return Ok(invalid_grant_response("Invalid credentials"));
             }
 
             let two_factor_enabled = two_factor::is_authenticator_enabled(&db, &user.id).await?;
