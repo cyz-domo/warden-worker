@@ -78,12 +78,12 @@ pub struct TokenRequest {
     #[serde(rename = "deviceType", alias = "device_type")]
     #[serde(default, deserialize_with = "deserialize_trimmed_i32_opt")]
     device_type: Option<i32>,
-    #[serde(rename = "twoFactorToken")]
+    #[serde(rename = "twoFactorToken", alias = "two_factor_token")]
     two_factor_token: Option<String>,
     #[serde(rename = "twoFactorProvider", alias = "two_factor_provider")]
     #[serde(default, deserialize_with = "deserialize_trimmed_i32_opt")]
     two_factor_provider: Option<i32>,
-    #[serde(rename = "twoFactorRemember")]
+    #[serde(rename = "twoFactorRemember", alias = "two_factor_remember")]
     #[serde(default, deserialize_with = "deserialize_truthy_i32_opt")]
     two_factor_remember: Option<i32>,
 }
