@@ -14,9 +14,6 @@ on:
 permissions:
   contents: read
 
-env:
-  RUSTFLAGS: '--cfg getrandom_backend="wasm_js"'
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -34,6 +31,8 @@ jobs:
       - name: Verify versions
         run: ./scripts/verify-version.sh
       - name: Build Worker
+        env:
+          RUSTFLAGS: '--cfg getrandom_backend="wasm_js"'
         run: worker-build --release
       - name: Apply production migrations
         uses: cloudflare/wrangler-action@v3
