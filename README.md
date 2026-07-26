@@ -37,7 +37,7 @@ Warden Worker 是一个运行在 Cloudflare Workers 上的轻量级 Bitwarden �
 
 ## 完整 Cloudflare 部署流程
 
-以下流程适用于全新部署。测试和生产必须使用不同的 Worker、D1、Secrets 和域名。
+以下流程适用于生产部署。仓库的自动发布只针对 `main` 分支；`wrangler.test.jsonc` 仅保留作本地或历史环境配置，不参与自动发布。
 
 ### 1. 安装和登录
 
@@ -54,43 +54,42 @@ wrangler whoami
 ### 2. 创建 D1 并写入配置
 
 ```bash
-wrangler d1 create warden-sql-test
 wrangler d1 create warden-sql
 ```
 
-将输出的 `database_id` 分别写入 `wrangler.test.jsonc` 和 `wrangler.production.jsonc`。两个环境不能共用 database ID，并保留 `binding: "vault1"` 和 `migrations_dir: "sql/migrations"`。
+将输出的生产 `database_id` 写入 `wrangler.production.jsonc`，并保留 `binding: "vault1"`、正确的 `database_name` 和 `migrations_dir: "sql/migrations"`。
 
 ### 3. 初始化或升级数据库
 
 仅对全新空数据库执行初始化；`schema_full.sql` 可能删除已有表，已有数据时禁止执行：
 
 ```bash
-wrangler d1 execute vault1 --remote --config wrangler.test.jsonc --file sql/schema_full.sql
-wrangler d1 execute vault1 --remote --config wrangler.production.jsonc --file sql/schema_full.sql
+wrangler d1 execute vault1 --remote \
+  --config wrangler.production.jsonc --file sql/schema_full.sql
 ```
 
 已有环境只能使用增量迁移：
 
 ```bash
-wrangler d1 migrations apply vault1 --remote --config wrangler.test.jsonc
-wrangler d1 migrations apply vault1 --remote --config wrangler.production.jsonc
+wrangler d1 migrations apply vault1 --remote \
+  --config wrangler.production.jsonc
 ```
 
 注册白名单表由增量 migration 创建。`HeavyDo` 的 Durable Object migration 由 `wrangler deploy` 自动根据 migration tag 处理，不需要手动执行 SQL。
 
 ### 4. 配置管理员和 Secrets
 
-每个环境分别设置：
+生产环境设置：
 
 ```bash
-wrangler secret put JWT_SECRET --config wrangler.test.jsonc
-wrangler secret put JWT_REFRESH_SECRET --config wrangler.test.jsonc
-wrangler secret put ADMIN_EMAIL --config wrangler.test.jsonc
-wrangler secret put SIGNUPS_ALLOWED --config wrangler.test.jsonc
-wrangler secret put TWO_FACTOR_ENC_KEY --config wrangler.test.jsonc
+wrangler secret put JWT_SECRET --config wrangler.production.jsonc
+wrangler secret put JWT_REFRESH_SECRET --config wrangler.production.jsonc
+wrangler secret put ADMIN_EMAIL --config wrangler.production.jsonc
+wrangler secret put SIGNUPS_ALLOWED --config wrangler.production.jsonc
+wrangler secret put TWO_FACTOR_ENC_KEY --config wrangler.production.jsonc
 ```
 
-生产环境将配置替换为 `wrangler.production.jsonc`。`JWT_SECRET`、`JWT_REFRESH_SECRET` 和 `TWO_FACTOR_ENC_KEY` 必须使用高强度随机值，测试与生产不能复用：
+`JWT_SECRET`、`JWT_REFRESH_SECRET` 和 `TWO_FACTOR_ENC_KEY` 必须使用高强度随机值：
 
 ```bash
 openssl rand -base64 48
@@ -141,7 +140,6 @@ curl -X PATCH 'https://你的域名/api/admin/allowlist/user%40example.com' \
 ### 6. 部署 Worker
 
 ```bash
-wrangler deploy --config wrangler.test.jsonc
 wrangler deploy --config wrangler.production.jsonc
 ```
 
@@ -158,17 +156,34 @@ curl -f https://你的域名/api/config
 
 还应验证 `/demo.html`、`/admin.html`、新旧账号登录、refresh token、同步、文本/文件 Send、TOTP 和 Android remember-device。
 
-### 8. GitHub Actions 发布
+### 8. GitHub 自动部署
 
-在 GitHub 的 `test` 和 `production` Environment 中分别设置：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`，以及可选的 `TEST_BASE_URL` 或 `PRODUCTION_BASE_URL`。Token 需要 Workers、D1 和 Durable Objects 相关权限。
+可以直接连接 GitHub 仓库自动部署，不需要额外服务器或 GitHub App。仓库的 `.github/workflows/deploy-production.yml` 已配置为：推送 `main` 自动构建、应用 D1 migration、部署 Worker、执行 smoke test；也支持 GitHub Actions 页面手动触发。
 
-推送 `develop` 会自动部署测试环境；生产通过 `Deploy production` workflow 手动选择 ref。生产发布顺序应为：测试部署和回归、确认生产 D1 ID、备份生产 D1、执行增量 migration、部署 Worker、smoke test、非管理员账号回归。生产 Environment 建议启用审批。
+在 GitHub 仓库的 `Settings → Environments` 中创建 `production` Environment，并添加以下 Secrets：
+
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+- `PRODUCTION_BASE_URL`（可选；设置后自动执行 smoke test）
+
+API Token 需要目标账户的 Workers、D1 和 Durable Objects 相关权限。建议给 `production` Environment 设置审批人或保护规则，让 `main` 推送后先等待人工批准。
+
+自动部署步骤为：
+
+1. 推送代码到 GitHub `main`。
+2. GitHub Actions 检出代码并安装 Rust/WASM 工具链。
+3. 校验 Web Vault 版本并构建 Worker。
+4. 应用 `sql/migrations` 中尚未执行的生产 D1 migration。
+5. 执行 `wrangler deploy --config wrangler.production.jsonc`，DO migration 自动处理。
+6. 如果设置了 `PRODUCTION_BASE_URL`，执行 `/api/config`、`/api/version` 和 `/api/alive` 检查。
+
+首次上线仍建议先人工执行一次初始化、配置 Secrets 和管理员账号；之后正常合并到 `main` 即可自动部署。
 
 ### 9. 备份、升级和回滚
 
 已有环境升级只能执行 `wrangler d1 migrations apply`，绝对不要重新执行 `sql/schema_full.sql`。发布前使用 Cloudflare D1 导出能力或受控脚本备份，不要将包含邮箱、密文或 token 的备份提交到 Git。
 
-应用回归时保留已执行的 D1/DO migration，选择上一个已验证的 Git ref 重新部署 Worker；不要删除 Durable Object 类或回退数据库结构。修复后先在测试环境验证，再发布生产。
+应用回归时保留已执行的 D1/DO migration，选择上一个已验证的 Git ref 手动触发生产 workflow 重新部署 Worker；不要删除 Durable Object 类或回退数据库结构。修复后再合并到 `main`。
 
 ### 10. 本地开发
 
