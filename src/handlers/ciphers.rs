@@ -7,6 +7,7 @@ use worker::{query, Env};
 use crate::auth::Claims;
 use crate::db;
 use crate::error::AppError;
+use crate::handlers::two_factor::PasswordOrOtpData;
 use crate::models::cipher::{
     Cipher, CipherData, CipherRequestData, CipherRequestFlat, CreateCipherRequest,
 };
@@ -16,6 +17,27 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 pub struct CipherIdsRequest {
     ids: Vec<String>,
+}
+
+#[worker::send]
+pub async fn purge_personal_vault(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Json(payload): Json<PasswordOrOtpData>,
+) -> Result<Json<()>, AppError> {
+    let db = db::get_db(&env)?;
+    payload.validate(&db, &claims.sub, &env).await?;
+
+    db.batch(vec![
+        db.prepare("DELETE FROM ciphers WHERE user_id = ?1")
+            .bind(&[claims.sub.clone().into()])?,
+        db.prepare("DELETE FROM folders WHERE user_id = ?1")
+            .bind(&[claims.sub.into()])?,
+    ])
+    .await
+    .map_err(|_| AppError::Database)?;
+
+    Ok(Json(()))
 }
 
 async fn get_cipher_dbmodel(

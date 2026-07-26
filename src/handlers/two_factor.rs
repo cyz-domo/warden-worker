@@ -33,7 +33,12 @@ pub struct PasswordOrOtpData {
 }
 
 impl PasswordOrOtpData {
-    async fn validate(&self, db: &worker::D1Database, user_id: &str) -> Result<(), AppError> {
+    pub async fn validate(
+        &self,
+        db: &worker::D1Database,
+        user_id: &str,
+        env: &Env,
+    ) -> Result<(), AppError> {
         match (&self.master_password_hash, &self.otp) {
             (Some(master_password_hash), None) => {
                 let stored_hash: Option<String> = db
@@ -50,9 +55,31 @@ impl PasswordOrOtpData {
                 }
                 Ok(())
             }
-            (None, Some(_)) => Err(AppError::BadRequest(
-                "OTP validation is not supported".to_string(),
-            )),
+            (None, Some(otp)) => {
+                let secret_enc: Option<String> = db
+                    .prepare(
+                        "SELECT secret_enc FROM two_factor_authenticator WHERE user_id = ?1 AND enabled = 1",
+                    )
+                    .bind(&[user_id.into()])?
+                    .first(Some("secret_enc"))
+                    .await
+                    .map_err(|_| AppError::Database)?;
+                let Some(secret_enc) = secret_enc else {
+                    return Err(AppError::Unauthorized(
+                        "Authenticator is not enabled".to_string(),
+                    ));
+                };
+                let enc_key = env.secret("TWO_FACTOR_ENC_KEY").ok().map(|s| s.to_string());
+                let secret = two_factor::decrypt_secret_with_optional_key(
+                    enc_key.as_deref(),
+                    user_id,
+                    &secret_enc,
+                )?;
+                if !two_factor::verify_totp_code(&secret, otp)? {
+                    return Err(AppError::Unauthorized("Invalid OTP".to_string()));
+                }
+                Ok(())
+            }
             _ => Err(AppError::BadRequest("No validation provided".to_string())),
         }
     }
@@ -172,7 +199,7 @@ pub async fn get_authenticator(
     Json(payload): Json<PasswordOrOtpData>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = db::get_db(&env)?;
-    payload.validate(&db, &claims.sub).await?;
+    payload.validate(&db, &claims.sub, &env).await?;
 
     let enabled = two_factor::is_authenticator_enabled(&db, &claims.sub).await?;
     let key = if enabled {
@@ -204,7 +231,7 @@ pub async fn get_recovery(
     Json(payload): Json<PasswordOrOtpData>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = db::get_db(&env)?;
-    payload.validate(&db, &claims.sub).await?;
+    payload.validate(&db, &claims.sub, &env).await?;
     let code = match two_factor::get_recovery_code(&db, &claims.sub).await? {
         Some(code) => code,
         None => {
@@ -236,7 +263,7 @@ pub async fn activate_authenticator(
         master_password_hash: payload.master_password_hash.clone(),
         otp: payload.otp.clone(),
     }
-    .validate(&db, &claims.sub)
+    .validate(&db, &claims.sub, &env)
     .await?;
 
     let key = payload.key.trim().to_uppercase();
