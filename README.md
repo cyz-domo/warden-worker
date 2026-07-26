@@ -1,5 +1,4 @@
-> [!caution] 
-> # 无力维护，建议使用其他的fork，比如： https://github.com/qaz741wsd856/warden-worker
+> 本项目进入维护模式：后续主要跟随上游 Vaultwarden 的协议、客户端兼容性和安全修复进行同步，不再持续扩展独立业务功能。
 
 ---
 
@@ -21,55 +20,6 @@ Warden Worker 是一个运行在 Cloudflare Workers 上的轻量级 Bitwarden �
 - 核心能力：注册/登录、同步、密码项（Cipher）增删改、文件夹、TOTP（Authenticator）二步验证
 - 官方安卓兼容：支持 `/api/devices/knowndevice` 与 remember-device（twoFactorProvider=5）流程
 
-## 快速部署（Cloudflare）
-
-### 0. 前置条件
-
-- Cloudflare 账号
-- Node.js + Wrangler：`npm i -g wrangler`
-- Rust 工具链（建议稳定版）
-- 安装 worker-build：`cargo install worker-build`
-
-### 1. 创建 D1 数据库
-
-```bash
-wrangler d1 create vault1
-```
-
-把输出的 `database_id` 写入 `wrangler.jsonc` 的 `d1_databases`。
-
-### 2. 初始化数据库
-
-注意：`sql/schema_full.sql` 会 `DROP TABLE`，仅用于全新部署（会清空数据）。
-
-```bash
-wrangler d1 execute vault1 --remote --file=sql/schema_full.sql
-```
-
-`sql/schema.sql` 仅保留为历史/兼容用途；推荐新部署直接使用 `sql/schema_full.sql`。
-
-### 3. 配置密钥（Secrets）
-
-```bash
-wrangler secret put JWT_SECRET
-wrangler secret put JWT_REFRESH_SECRET
-wrangler secret put TWO_FACTOR_ENC_KEY
-wrangler secret put ADMIN_EMAIL
-```
-
-- JWT_SECRET：访问令牌签名密钥
-- JWT_REFRESH_SECRET：刷新令牌签名密钥
-- ADMIN_EMAIL：唯一管理员邮箱，用于访问 `/admin.html` 管理后台
-- TWO_FACTOR_ENC_KEY：可选，Base64 的 32 字节密钥；用于加密存储 TOTP 秘钥（不设置则以 `plain:` 形式存储）
-
-### 4. 部署
-
-```bash
-wrangler deploy
-```
-
-部署后，把 Workers URL 或自定义域名（例如 `https://warden.2x.nz`）填入 Bitwarden 客户端的“自托管服务器 URL”。
-
 ## 客户端使用建议
 
 - 官方安卓如果之前指向过其它自托管地址，建议“删除账号/清缓存后重新添加服务器”，避免 remember token 跨服务端复用导致登录失败。
@@ -85,27 +35,175 @@ wrangler deploy
 - 2FA：`GET /api/two-factor`、`/api/two-factor/authenticator/*`
 - 官方安卓设备探测：`GET /api/devices/knowndevice`
 
-## 本地开发
+## 完整 Cloudflare 部署流程
+
+以下流程适用于全新部署。测试和生产必须使用不同的 Worker、D1、Secrets 和域名。
+
+### 1. 安装和登录
 
 ```bash
-wrangler d1 execute vault1 --local --file=sql/schema_full.sql
-wrangler dev
+npm install --global wrangler
+cargo install worker-build --locked
+rustup target add wasm32-unknown-unknown
+wrangler login
+wrangler whoami
 ```
 
-## 测试与生产发布
+部署 `HeavyDo` 需要 Workers、D1 和 Durable Objects 权限；建议确认账号套餐支持 Durable Objects。
 
-项目提供两个独立配置：`wrangler.test.jsonc` 和 `wrangler.production.jsonc`。当前测试 D1 已创建，ID 为 `1ab251f5-2e8b-413c-a49b-ef0de918018d`；生产配置仍需填入生产 D1 ID。不要让两个环境共用数据库。
+### 2. 创建 D1 并写入配置
 
-GitHub Actions 需要配置 `test` 与 `production` Environments，并分别设置 Cloudflare API Token、Account ID 和可选的 `TEST_BASE_URL`/`PRODUCTION_BASE_URL`。推送到 `develop` 会自动部署测试环境；生产环境通过 `Deploy production` workflow 手动选择 ref 发布。
+```bash
+wrangler d1 create warden-sql-test
+wrangler d1 create warden-sql
+```
 
-构建会校验 `static/web-vault/version.json` 与 `vw-version.json`，并将版本同步返回到 `/api/config` 和 `/api/version`。D1 migration 使用增量 SQL，不要在生产 workflow 中执行 `sql/schema_full.sql`。
+将输出的 `database_id` 分别写入 `wrangler.test.jsonc` 和 `wrangler.production.jsonc`。两个环境不能共用 database ID，并保留 `binding: "vault1"` 和 `migrations_dir: "sql/migrations"`。
 
-注册总开关由 `SIGNUPS_ALLOWED` 控制。注册邮箱白名单由 D1 的 `registration_allowlist` 表控制：表为空时允许所有邮箱；表中有记录时仅允许 `enabled=1` 的邮箱。部署 migration 后访问 `/admin.html` 管理白名单和查看用户统计。
+### 3. 初始化或升级数据库
 
+仅对全新空数据库执行初始化；`schema_full.sql` 可能删除已有表，已有数据时禁止执行：
 
-首次创建空的测试或生产 D1 时，只运行对应的 `Initialize test D1`/`Initialize production D1` 手动 workflow 一次。该步骤会执行 `sql/schema_full.sql`，会清空目标数据库；数据库已有数据时禁止运行。
+```bash
+wrangler d1 execute vault1 --remote --config wrangler.test.jsonc --file sql/schema_full.sql
+wrangler d1 execute vault1 --remote --config wrangler.production.jsonc --file sql/schema_full.sql
+```
 
-本地可用 `.dev.vars`（Wrangler 支持）注入 secrets。
+已有环境只能使用增量迁移：
+
+```bash
+wrangler d1 migrations apply vault1 --remote --config wrangler.test.jsonc
+wrangler d1 migrations apply vault1 --remote --config wrangler.production.jsonc
+```
+
+注册白名单表由增量 migration 创建。`HeavyDo` 的 Durable Object migration 由 `wrangler deploy` 自动根据 migration tag 处理，不需要手动执行 SQL。
+
+### 4. 配置管理员和 Secrets
+
+每个环境分别设置：
+
+```bash
+wrangler secret put JWT_SECRET --config wrangler.test.jsonc
+wrangler secret put JWT_REFRESH_SECRET --config wrangler.test.jsonc
+wrangler secret put ADMIN_EMAIL --config wrangler.test.jsonc
+wrangler secret put SIGNUPS_ALLOWED --config wrangler.test.jsonc
+wrangler secret put TWO_FACTOR_ENC_KEY --config wrangler.test.jsonc
+```
+
+生产环境将配置替换为 `wrangler.production.jsonc`。`JWT_SECRET`、`JWT_REFRESH_SECRET` 和 `TWO_FACTOR_ENC_KEY` 必须使用高强度随机值，测试与生产不能复用：
+
+```bash
+openssl rand -base64 48
+openssl rand -base64 48
+openssl rand -base64 32
+```
+
+`ADMIN_EMAIL` 必须对应一个已注册用户；它不是自动创建的管理员账号。首次部署建议将 `SIGNUPS_ALLOWED=true`，先注册管理员，再访问 `https://你的域名/admin.html` 验证后台，之后按需改为 `false` 关闭注册。
+
+### 5. 注册邮箱白名单
+
+注册总开关由 `SIGNUPS_ALLOWED` 控制，`registration_allowlist` 表决定细粒度权限：
+
+- 表为空：允许所有邮箱注册。
+- 表中有记录：仅允许 `enabled=1` 的邮箱注册。
+- 禁用邮箱不会删除已有账号。
+- 删除最后一条记录后，白名单为空，注册恢复公开（前提是 `SIGNUPS_ALLOWED=true`）。
+
+管理页面：`https://你的域名/admin.html`。管理员 API 要求 `Authorization: Bearer <access_token>`，仅 Cookie 登录不能通过管理员校验。
+
+```text
+GET    /api/admin/summary
+GET    /api/admin/users
+GET    /api/admin/allowlist
+POST   /api/admin/allowlist
+PATCH  /api/admin/allowlist/{email}
+DELETE /api/admin/allowlist/{email}
+```
+
+添加白名单：
+
+```bash
+curl -X POST https://你的域名/api/admin/allowlist \
+  -H 'Authorization: Bearer <管理员访问令牌>' \
+  -H 'Content-Type: application/json' \
+  --data '{"email":"user@example.com","enabled":true}'
+```
+
+暂停邮箱：
+
+```bash
+curl -X PATCH 'https://你的域名/api/admin/allowlist/user%40example.com' \
+  -H 'Authorization: Bearer <管理员访问令牌>' \
+  -H 'Content-Type: application/json' \
+  --data '{"enabled":false}'
+```
+
+### 6. 部署 Worker
+
+```bash
+wrangler deploy --config wrangler.test.jsonc
+wrangler deploy --config wrangler.production.jsonc
+```
+
+部署输出必须包含 `env.HEAVY_DO (HeavyDo) Durable Object` 和 `env.vault1 (...) D1 Database`。首次部署会登记 `HeavyDo`；以后部署由 Wrangler 根据 migration tag 自动判断是否需要执行 DO migration，不要修改已经发布的 tag。
+
+### 7. 验证部署
+
+```bash
+./scripts/smoke-test.sh https://你的域名
+curl -f https://你的域名/api/alive
+curl -f https://你的域名/api/version
+curl -f https://你的域名/api/config
+```
+
+还应验证 `/demo.html`、`/admin.html`、新旧账号登录、refresh token、同步、文本/文件 Send、TOTP 和 Android remember-device。
+
+### 8. GitHub Actions 发布
+
+在 GitHub 的 `test` 和 `production` Environment 中分别设置：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`，以及可选的 `TEST_BASE_URL` 或 `PRODUCTION_BASE_URL`。Token 需要 Workers、D1 和 Durable Objects 相关权限。
+
+推送 `develop` 会自动部署测试环境；生产通过 `Deploy production` workflow 手动选择 ref。生产发布顺序应为：测试部署和回归、确认生产 D1 ID、备份生产 D1、执行增量 migration、部署 Worker、smoke test、非管理员账号回归。生产 Environment 建议启用审批。
+
+### 9. 备份、升级和回滚
+
+已有环境升级只能执行 `wrangler d1 migrations apply`，绝对不要重新执行 `sql/schema_full.sql`。发布前使用 Cloudflare D1 导出能力或受控脚本备份，不要将包含邮箱、密文或 token 的备份提交到 Git。
+
+应用回归时保留已执行的 D1/DO migration，选择上一个已验证的 Git ref 重新部署 Worker；不要删除 Durable Object 类或回退数据库结构。修复后先在测试环境验证，再发布生产。
+
+### 10. 本地开发
+
+```bash
+wrangler d1 execute vault1 --local --file sql/schema_full.sql
+wrangler dev --config wrangler.jsonc
+```
+
+本地 Secrets 放在未提交的 `.dev.vars`，生产 Secrets 不要复制进去：
+
+```text
+JWT_SECRET=local-development-secret
+JWT_REFRESH_SECRET=local-development-refresh-secret
+SIGNUPS_ALLOWED=true
+ADMIN_EMAIL=admin@example.com
+TWO_FACTOR_ENC_KEY=<base64-32-byte-key>
+```
+
+## 常见问题
+
+### 登录返回 400
+
+检查 `grant_type`、refresh token 是否过期，以及客户端是否连接了正确环境。`/identity/connect/token` 支持 password、refresh_token 和 send_access 流程。
+
+### 发送文本失败
+
+客户端先通过 `grant_type=send_access` 获取短期 token，再使用 Bearer token 调用 `/api/sends/access`；普通用户 JWT 不能代替 Send access token。
+
+### 注册被拒绝
+
+检查 `SIGNUPS_ALLOWED`、`registration_allowlist` 是否为空、邮箱是否为 `enabled=1`，并确认客户端连接的是目标环境。
+
+### 管理页面无法操作
+
+确认当前登录邮箱与 `ADMIN_EMAIL` 一致，并使用 `Authorization: Bearer`；仅 Cookie 登录不会通过管理 API。
 
 ## 许可证
 
