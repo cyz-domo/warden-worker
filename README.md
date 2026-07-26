@@ -160,6 +160,41 @@ curl -f https://你的域名/api/config
 
 可以直接连接 GitHub 仓库自动部署，不需要额外服务器或 GitHub App。仓库的 `.github/workflows/deploy-production.yml` 已配置为：推送 `main` 自动构建、应用 D1 migration、部署 Worker、执行 smoke test；也支持 GitHub Actions 页面手动触发。
 
+#### 必须先配置的 Worker Secrets
+
+`ADMIN_EMAIL` 和 `SIGNUPS_ALLOWED` 不是 GitHub Actions 自动生成的变量，必须提前写入 Cloudflare 生产 Worker 的 Secrets。GitHub Actions 只负责构建和部署，不会替你创建管理员账号，也不会初始化注册策略。
+
+在本地配置生产 Worker：
+
+```bash
+wrangler secret put ADMIN_EMAIL --config wrangler.production.jsonc
+wrangler secret put SIGNUPS_ALLOWED --config wrangler.production.jsonc
+```
+
+建议首次上线时设置：
+
+```text
+ADMIN_EMAIL=admin@example.com
+SIGNUPS_ALLOWED=true
+```
+
+然后使用 `admin@example.com` 注册并登录，打开 `/admin.html` 添加允许注册的邮箱。白名单保存于生产 D1 的 `registration_allowlist` 表，不是环境变量。确认管理员和白名单正常后，可以将 `SIGNUPS_ALLOWED` 更新为 `false` 关闭公开注册：
+
+```bash
+wrangler secret put SIGNUPS_ALLOWED --config wrangler.production.jsonc
+# Wrangler 提示输入时填写 false
+```
+
+以下值也必须提前配置在 Cloudflare 生产 Worker 中：
+
+```bash
+wrangler secret put JWT_SECRET --config wrangler.production.jsonc
+wrangler secret put JWT_REFRESH_SECRET --config wrangler.production.jsonc
+wrangler secret put TWO_FACTOR_ENC_KEY --config wrangler.production.jsonc
+```
+
+这些 Worker Secrets 与下面的 GitHub Actions Secrets 是两套不同的配置，不能混淆。
+
 在 GitHub 仓库的 `Settings → Environments` 中创建 `production` Environment，并添加以下 Secrets：
 
 - `CLOUDFLARE_API_TOKEN`
