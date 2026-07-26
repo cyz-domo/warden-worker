@@ -355,7 +355,8 @@ fn two_factor_required_response() -> Response {
             "TwoFactorProviders2": { "0": null },
             "MasterPasswordPolicy": { "Object": "masterPasswordPolicy" },
             "error": "invalid_grant",
-            "error_description": "Two factor required."
+            "error_description": "Two factor required.",
+            "message": "Two factor required."
         })),
     )
         .into_response()
@@ -369,7 +370,8 @@ fn invalid_two_factor_response() -> Response {
             "TwoFactorProviders2": { "0": null },
             "MasterPasswordPolicy": { "Object": "masterPasswordPolicy" },
             "error": "invalid_grant",
-            "error_description": "Invalid two factor token."
+            "error_description": "Invalid two factor token.",
+            "message": "Invalid two factor token."
         })),
     )
         .into_response()
@@ -500,11 +502,10 @@ pub async fn token(
                     let Some(token) = token.as_deref() else {
                         return Ok(two_factor_required_response());
                     };
-                    let recovery_code = two_factor::get_recovery_code(&db, &user.id)
-                        .await?
-                        .ok_or_else(|| {
-                            AppError::Unauthorized("Two-step token is invalid".to_string())
-                        })?;
+                    let Some(recovery_code) = two_factor::get_recovery_code(&db, &user.id).await?
+                    else {
+                        return Ok(invalid_two_factor_response());
+                    };
                     if !constant_time_eq(
                         recovery_code.trim().to_lowercase().as_bytes(),
                         token.trim().to_lowercase().as_bytes(),
