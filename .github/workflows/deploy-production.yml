@@ -41,7 +41,7 @@ jobs:
           WORKER_NAME: ${{ vars.WORKER_NAME || 'warden-worker' }}
           D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
           D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
-        run: node scripts/render-wrangler-config.mjs wrangler.deploy.template.jsonc /tmp/wrangler.deploy.jsonc
+        run: node scripts/render-wrangler-config.mjs wrangler.deploy.template.jsonc wrangler.deploy.generated.jsonc
       - name: Validate Cloudflare credentials
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -54,7 +54,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: wrangler d1 migrations apply vault1 --remote --config /tmp/wrangler.deploy.jsonc
+        run: wrangler d1 migrations apply vault1 --remote --config wrangler.deploy.generated.jsonc
       - name: Sync Worker Secrets
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -66,7 +66,7 @@ jobs:
           SIGNUPS_ALLOWED: ${{ vars.SIGNUPS_ALLOWED || 'false' }}
         run: |
           set -euo pipefail
-          sync_secret() { test -n "${!1:-}" || { echo "Missing Worker secret/value: $1"; exit 1; }; printf '%s' "${!1}" | wrangler secret put "$2" --config /tmp/wrangler.deploy.jsonc; }
+          sync_secret() { test -n "${!1:-}" || { echo "Missing Worker secret/value: $1"; exit 1; }; printf '%s' "${!1}" | wrangler secret put "$2" --config wrangler.deploy.generated.jsonc; }
           sync_secret JWT_SECRET JWT_SECRET
           sync_secret JWT_REFRESH_SECRET JWT_REFRESH_SECRET
           sync_secret TWO_FACTOR_ENC_KEY TWO_FACTOR_ENC_KEY
@@ -77,7 +77,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           RUSTFLAGS: '--cfg getrandom_backend="wasm_js"'
-        run: wrangler deploy --config /tmp/wrangler.deploy.jsonc
+        run: wrangler deploy --config wrangler.deploy.generated.jsonc
       - name: Smoke test
         env:
           PRODUCTION_BASE_URL: ${{ vars.BASE_URL }}
