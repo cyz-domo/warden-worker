@@ -19,7 +19,7 @@ fn normalize_email(email: &str) -> Result<String, AppError> {
     Ok(email)
 }
 
-async fn require_admin(
+pub(crate) async fn require_admin(
     claims: &Claims,
     _headers: &HeaderMap,
     env: &Arc<Env>,

@@ -74,7 +74,7 @@ pub async fn import_data(
         }
     }
 
-    let cipher_query = "INSERT OR IGNORE INTO ciphers (id, user_id, organization_id, type, data, favorite, folder_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+    let cipher_query = "INSERT OR IGNORE INTO ciphers (id, user_id, organization_id, type, data, key, favorite, folder_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 
     let mut cipher_stmts: Vec<D1PreparedStatement> = Vec::new();
     for import_cipher in payload.ciphers {
@@ -84,6 +84,7 @@ pub async fn import_data(
             login: import_cipher.login,
             card: import_cipher.card,
             identity: import_cipher.identity,
+            ssh_key: import_cipher.ssh_key,
             secure_note: import_cipher.secure_note,
             fields: import_cipher.fields,
             password_history: import_cipher.password_history,
@@ -100,6 +101,7 @@ pub async fn import_data(
             to_js_val(import_cipher.organization_id),
             import_cipher.r#type.into(),
             data.into(),
+            to_js_val(import_cipher.key),
             import_cipher.favorite.into(),
             to_js_val(import_cipher.folder_id),
             now.clone().into(),

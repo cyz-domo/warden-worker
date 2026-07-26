@@ -15,6 +15,8 @@ pub struct CipherData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_key: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub secure_note: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<Value>,
@@ -193,7 +195,7 @@ impl Serialize for Cipher {
     {
         let mut response_map = Map::new();
 
-        response_map.insert("object".to_string(), json!(self.object));
+        response_map.insert("object".to_string(), json!("cipherDetails"));
         response_map.insert("id".to_string(), json!(self.id));
         if self.user_id.is_some() {
             response_map.insert("userId".to_string(), json!(self.user_id));
@@ -230,16 +232,10 @@ impl Serialize for Cipher {
                 "notes".to_string(),
                 data_clone.get("notes").cloned().unwrap_or(Value::Null),
             );
-            response_map.insert(
-                "fields".to_string(),
-                data_clone.get("fields").cloned().unwrap_or(Value::Null),
-            );
+            response_map.insert("fields".to_string(), clean_fields(data_clone.get("fields")));
             response_map.insert(
                 "passwordHistory".to_string(),
-                data_clone
-                    .get("passwordHistory")
-                    .cloned()
-                    .unwrap_or(Value::Null),
+                clean_password_history(data_clone.get("passwordHistory")),
             );
             response_map.insert(
                 "reprompt".to_string(),
@@ -255,17 +251,31 @@ impl Serialize for Cipher {
             let mut identity = Value::Null;
 
             match self.r#type {
-                1 => login = data_clone.get("login").cloned().unwrap_or(Value::Null),
-                2 => secure_note = data_clone.get("secureNote").cloned().unwrap_or(Value::Null),
+                1 => login = clean_login(data_clone.get("login")),
+                2 => secure_note = clean_secure_note(data_clone.get("secureNote")),
                 3 => card = data_clone.get("card").cloned().unwrap_or(Value::Null),
                 4 => identity = data_clone.get("identity").cloned().unwrap_or(Value::Null),
                 _ => {}
             }
 
+            let uri = if self.r#type == 1 {
+                login_uri(&login)
+            } else {
+                Value::Null
+            };
             response_map.insert("login".to_string(), login);
             response_map.insert("secureNote".to_string(), secure_note);
             response_map.insert("card".to_string(), card);
             response_map.insert("identity".to_string(), identity);
+            response_map.insert(
+                "sshKey".to_string(),
+                if self.r#type == 5 {
+                    clean_ssh_key(data_clone.get("sshKey"))
+                } else {
+                    Value::Null
+                },
+            );
+            response_map.insert("uri".to_string(), uri);
         } else {
             response_map.insert("name".to_string(), Value::Null);
             response_map.insert("notes".to_string(), Value::Null);
@@ -276,9 +286,130 @@ impl Serialize for Cipher {
             response_map.insert("secureNote".to_string(), Value::Null);
             response_map.insert("card".to_string(), Value::Null);
             response_map.insert("identity".to_string(), Value::Null);
+            response_map.insert("sshKey".to_string(), Value::Null);
+            response_map.insert("uri".to_string(), Value::Null);
         }
 
         Value::Object(response_map).serialize(serializer)
+    }
+}
+
+fn clean_fields(value: Option<&Value>) -> Value {
+    let Some(Value::Array(fields)) = value else {
+        return Value::Array(Vec::new());
+    };
+    Value::Array(
+        fields
+            .iter()
+            .map(|field| {
+                let mut field = field.clone();
+                if let Value::Object(object) = &mut field {
+                    let field_type = object.get("type").and_then(|value| {
+                        value
+                            .as_i64()
+                            .or_else(|| value.as_str()?.parse::<i64>().ok())
+                    });
+                    object.insert(
+                        "type".to_string(),
+                        json!(field_type
+                            .filter(|value| (0..=255).contains(value))
+                            .unwrap_or(1)),
+                    );
+                }
+                field
+            })
+            .collect(),
+    )
+}
+
+fn clean_password_history(value: Option<&Value>) -> Value {
+    let Some(Value::Array(history)) = value else {
+        return Value::Array(Vec::new());
+    };
+    Value::Array(
+        history
+            .iter()
+            .filter_map(|entry| {
+                let Value::Object(object) = entry else {
+                    return None;
+                };
+                if !object.get("password").is_some_and(Value::is_string) {
+                    return None;
+                }
+                let mut entry = entry.clone();
+                if let Value::Object(object) = &mut entry {
+                    object
+                        .entry("lastUsedDate".to_string())
+                        .or_insert_with(|| json!("1970-01-01T00:00:00.000000Z"));
+                }
+                Some(entry)
+            })
+            .collect(),
+    )
+}
+
+fn clean_login(value: Option<&Value>) -> Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    let mut login = value.clone();
+    if let Value::Object(object) = &mut login {
+        if let Some(Value::Array(uris)) = object.get_mut("uris") {
+            for uri in uris {
+                if let Value::Object(uri) = uri {
+                    let normalized = uri.get("match").and_then(|value| {
+                        value
+                            .as_i64()
+                            .or_else(|| value.as_str()?.parse::<i64>().ok())
+                    });
+                    uri.insert(
+                        "match".to_string(),
+                        normalized
+                            .filter(|value| (0..=255).contains(value))
+                            .map_or(Value::Null, |value| json!(value)),
+                    );
+                }
+            }
+        }
+    }
+    login
+}
+
+fn login_uri(login: &Value) -> Value {
+    login
+        .get("uris")
+        .and_then(Value::as_array)
+        .and_then(|uris| uris.first())
+        .and_then(|uri| uri.get("uri"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn clean_secure_note(value: Option<&Value>) -> Value {
+    match value {
+        Some(Value::Object(object)) if object.get("type").is_some_and(Value::is_number) => {
+            Value::Object(object.clone())
+        }
+        _ => json!({ "type": 0 }),
+    }
+}
+
+fn clean_ssh_key(value: Option<&Value>) -> Value {
+    let Some(Value::Object(object)) = value else {
+        return Value::Null;
+    };
+    if ["keyFingerprint", "privateKey", "publicKey"]
+        .iter()
+        .all(|name| {
+            object
+                .get(*name)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+        })
+    {
+        Value::Object(object.clone())
+    } else {
+        Value::Null
     }
 }
 
@@ -383,6 +514,70 @@ mod tests {
         assert_eq!(cipher.data["name"], "Example");
         assert!(!cipher.favorite);
     }
+
+    #[test]
+    fn cipher_serialization_normalizes_mobile_compatibility_fields() {
+        let cipher = Cipher {
+            id: "cipher-id".to_string(),
+            user_id: Some("user-id".to_string()),
+            organization_id: None,
+            r#type: 1,
+            data: json!({
+                "name": "Login",
+                "login": {
+                    "uris": [{"uri": "https://example.com", "match": "0"}]
+                },
+                "fields": [{"type": "2", "name": "field"}],
+                "passwordHistory": [{"password": "old"}, {"password": null}]
+            }),
+            key: Some("encrypted-cipher-key".to_string()),
+            favorite: false,
+            folder_id: None,
+            deleted_at: None,
+            archived_at: None,
+            created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            updated_at: "2026-01-01T00:00:00.000Z".to_string(),
+            object: "cipher".to_string(),
+            organization_use_totp: false,
+            edit: true,
+            view_password: true,
+            collection_ids: None,
+        };
+
+        let value = serde_json::to_value(cipher).expect("serialize cipher");
+        assert_eq!(value["object"], "cipherDetails");
+        assert_eq!(value["key"], "encrypted-cipher-key");
+        assert_eq!(value["uri"], "https://example.com");
+        assert_eq!(value["login"]["uris"][0]["match"], 0);
+        assert_eq!(value["fields"][0]["type"], 2);
+        assert_eq!(value["passwordHistory"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn cipher_serialization_protects_invalid_mobile_cipher_data() {
+        let cipher = Cipher {
+            id: "cipher-id".to_string(),
+            user_id: Some("user-id".to_string()),
+            organization_id: None,
+            r#type: 2,
+            data: json!({"name": "Note", "secureNote": null}),
+            key: None,
+            favorite: false,
+            folder_id: None,
+            deleted_at: None,
+            archived_at: None,
+            created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            updated_at: "2026-01-01T00:00:00.000Z".to_string(),
+            object: "cipher".to_string(),
+            organization_use_totp: false,
+            edit: true,
+            view_password: true,
+            collection_ids: None,
+        };
+
+        let value = serde_json::to_value(cipher).expect("serialize cipher");
+        assert_eq!(value["secureNote"]["type"], 0);
+    }
 }
 
 // Represents the "Cipher" object within the incoming request payload.
@@ -408,6 +603,8 @@ pub struct CipherRequestData {
     pub card: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_key: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secure_note: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]

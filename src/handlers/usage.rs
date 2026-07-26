@@ -1,5 +1,6 @@
 use axum::{
     extract::{Query, State},
+    http::HeaderMap,
     Json,
 };
 use serde::Deserialize;
@@ -7,7 +8,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use worker::Env;
 
-use crate::{db, error::AppError};
+use crate::{auth::Claims, db, error::AppError, handlers::admin};
 
 const D1_MAX_BYTES: i64 = 500 * 1024 * 1024;
 
@@ -33,9 +34,12 @@ async fn sum_i64(
 
 #[worker::send]
 pub async fn d1_usage(
+    claims: Claims,
+    headers: HeaderMap,
     State(env): State<Arc<Env>>,
     Query(q): Query<UsageQuery>,
 ) -> Result<Json<Value>, AppError> {
+    admin::require_admin(&claims, &headers, &env).await?;
     let db = db::get_db(&env)?;
     let user_id = q.user_id.as_deref();
 
