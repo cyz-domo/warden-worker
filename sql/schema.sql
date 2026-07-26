@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS ciphers (
     organization_id TEXT,
     type INTEGER NOT NULL,
     data TEXT NOT NULL, -- JSON blob of all encrypted fields (name, notes, login, etc.)
+    key TEXT, -- Per-cipher encrypted key introduced by newer clients
     favorite BOOLEAN NOT NULL DEFAULT 0,
     folder_id TEXT,
     deleted_at TEXT,

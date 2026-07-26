@@ -79,6 +79,7 @@ pub struct Cipher {
     #[serde(rename = "type")]
     pub r#type: i32,
     pub data: Value,
+    pub key: Option<String>,
     #[serde(deserialize_with = "deserialize_bool_from_int")]
     pub favorite: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,6 +114,7 @@ pub struct CipherDBModel {
     pub r#type: i32,
     #[serde(deserialize_with = "deserialize_json_text")]
     pub data: String,
+    pub key: Option<String>,
     #[serde(deserialize_with = "deserialize_i32_from_bool_or_number")]
     pub favorite: i32,
     pub folder_id: Option<String>,
@@ -165,6 +167,7 @@ impl Into<Cipher> for CipherDBModel {
             organization_id: self.organization_id,
             r#type: self.r#type,
             data: serde_json::from_str(&self.data).unwrap_or_default(),
+            key: self.key,
             favorite: match self.favorite {
                 0 => false,
                 _ => true,
@@ -198,6 +201,7 @@ impl Serialize for Cipher {
         response_map.insert("organizationId".to_string(), json!(self.organization_id));
         response_map.insert("folderId".to_string(), json!(self.folder_id));
         response_map.insert("type".to_string(), json!(self.r#type));
+        response_map.insert("key".to_string(), json!(self.key));
         response_map.insert("favorite".to_string(), json!(self.favorite));
         response_map.insert("edit".to_string(), json!(self.edit));
         response_map.insert(
@@ -303,6 +307,7 @@ mod tests {
                 "notes": null,
                 "login": { "username": "u", "password": "p" }
             }),
+            key: None,
             favorite: false,
             folder_id: None,
             deleted_at: None,
@@ -343,6 +348,7 @@ mod tests {
             "organization_id": null,
             "type": 1,
             "data": {"name": "Example", "login": {"username": "u"}},
+            "key": null,
             "favorite": true,
             "folder_id": null,
             "deleted_at": null,
@@ -364,6 +370,7 @@ mod tests {
             "organization_id": null,
             "type": 1,
             "data": "{\"name\":\"Example\",\"login\":null}",
+            "key": null,
             "favorite": 0,
             "folder_id": null,
             "deleted_at": null,
@@ -389,6 +396,8 @@ pub struct CipherRequestData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub organization_id: Option<String>,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(default)]
