@@ -37,7 +37,7 @@ Warden Worker 是一个运行在 Cloudflare Workers 上的轻量级 Bitwarden �
 
 ## 完整 Cloudflare 部署流程
 
-以下流程适用于生产部署。仓库的自动发布只针对 `main` 分支；`wrangler.test.jsonc` 仅保留作本地或历史环境配置，不参与自动发布。
+以下流程适用于本地手动部署。推荐的测试/生产自动发布流程见第 8 节；自动发布会使用 GitHub Environment 中的 D1 和 Worker 配置，不依赖仓库内固定的账户、D1 或 Worker 名称。
 
 ### 1. 安装和登录
 
@@ -51,13 +51,13 @@ wrangler whoami
 
 部署 `HeavyDo` 需要 Workers、D1 和 Durable Objects 权限；建议确认账号套餐支持 Durable Objects。
 
-### 2. 创建 D1 并写入配置
+### 2. 创建 D1 并记录配置
 
 ```bash
 wrangler d1 create warden-sql
 ```
 
-将输出的生产 `database_id` 写入 `wrangler.production.jsonc`，并保留 `binding: "vault1"`、正确的 `database_name` 和 `migrations_dir: "sql/migrations"`。
+记录输出的 `database_id` 和数据库名称。手动部署时写入对应 Wrangler 配置；GitHub Actions 部署时将它们分别填入 Environment Variables `D1_DATABASE_ID` 和 `D1_DATABASE_NAME`。
 
 ### 3. 初始化或升级数据库
 
@@ -176,83 +176,24 @@ curl -f https://你的域名/api/config
 
 还应验证 `/demo.html`、`/admin.html`、新旧账号登录、refresh token、同步、文本/文件 Send、TOTP 和 Android remember-device。
 
-### 8. GitHub 自动部署
+### 8. GitHub Actions 自动部署
 
-可以直接连接 GitHub 仓库自动部署，不需要额外服务器或 GitHub App。仓库的 `.github/workflows/deploy-production.yml` 已配置为：推送 `main` 自动构建、应用 D1 migration、部署 Worker、执行 smoke test；也支持 GitHub Actions 页面手动触发。
+仓库提供四个 workflow：`Deploy test`（仅手动触发，读取 `test` Environment）、`Deploy production`（推送 `main` 或手动触发，读取 `production` Environment）、`Initialize test D1` 和 `Initialize production D1`（仅手动触发）。测试流程不会因代码推送自动运行，也不会读取或修改生产 Environment。
 
-#### 必须先配置的 Worker Secrets
+#### 第一次配置顺序
 
-`ADMIN_EMAIL`、`SIGNUPS_ALLOWED`、`JWT_SECRET`、`JWT_REFRESH_SECRET` 和 `TWO_FACTOR_ENC_KEY` 不是 GitHub Actions 自动生成的变量，必须在 GitHub Actions 第一次生产部署前写入 Cloudflare 生产 Worker 的 Secrets。它们是运行时配置，不要求在 GitHub Actions 构建阶段提供。
+1. 在 Cloudflare 创建独立的测试/生产 D1，记录各自的数据库名称和 ID。
+2. 创建 API Token，并将 Account Resources 限定到目标账户。至少授予账户级 `Workers Scripts: Edit`、`D1: Edit`、`Account Settings: Read`；不要使用 Global API Key。
+3. 在 GitHub `Settings → Environments` 创建 `test`、`production`。生产环境建议设置 Required reviewers。
+4. 每个 Environment 的 **Variables** 配置：`WORKER_NAME`（默认生产 `warden-worker`、测试 `warden-worker-test`）、`D1_DATABASE_NAME`、`D1_DATABASE_ID`、`ADMIN_EMAIL`、`SIGNUPS_ALLOWED`、`BASE_URL`。
+5. 每个 Environment 的 **Secrets** 配置：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`WORKER_JWT_SECRET`、`WORKER_JWT_REFRESH_SECRET`、`WORKER_TWO_FACTOR_ENC_KEY`。
+6. 第一次只对空数据库手动运行对应的 `Initialize ... D1`；workflow 会先只读检查核心表，检测到任意数据就直接退出，不执行 `sql/schema_full.sql`。该 SQL 仍可能清空表，已有数据禁止运行。
+7. 首次部署测试时，在 Actions 页面手动运行 `Deploy test` 并选择要验证的 ref；生产推送 `main` 或手动运行 `Deploy production`。
+8. 如使用自定义域，在 Worker 部署后到 Cloudflare `Workers → Settings → Domains & Routes → Add Custom Domain` 绑定，再把该 URL 写入 `BASE_URL`。
 
-在本地配置生产 Worker：
+Workflow 每次按此顺序执行：检出代码 → 构建 Rust/WASM → 校验版本 → 用 Variables 生成 `/tmp/wrangler.deploy.jsonc` → 应用增量 D1 migration → 用 `wrangler secret put` 把 GitHub Secrets/Variables 同步为 Worker 运行时 Secrets → 部署 Worker/ Durable Object → 执行可选 smoke test。
 
-```bash
-wrangler secret put ADMIN_EMAIL --config wrangler.production.jsonc
-wrangler secret put SIGNUPS_ALLOWED --config wrangler.production.jsonc
-```
-
-建议首次上线时设置：
-
-```text
-ADMIN_EMAIL=admin@example.com
-SIGNUPS_ALLOWED=true
-```
-
-然后使用 `admin@example.com` 注册并登录，打开 `/admin.html` 添加允许注册的邮箱。白名单保存于生产 D1 的 `registration_allowlist` 表，不是环境变量。确认管理员和白名单正常后，可以将 `SIGNUPS_ALLOWED` 更新为 `false` 关闭公开注册：
-
-```bash
-wrangler secret put SIGNUPS_ALLOWED --config wrangler.production.jsonc
-# Wrangler 提示输入时填写 false
-```
-
-以下值也必须提前配置在 Cloudflare 生产 Worker 中：
-
-```bash
-wrangler secret put JWT_SECRET --config wrangler.production.jsonc
-wrangler secret put JWT_REFRESH_SECRET --config wrangler.production.jsonc
-wrangler secret put TWO_FACTOR_ENC_KEY --config wrangler.production.jsonc
-```
-
-这些 Worker Secrets 与下面的 GitHub Actions Secrets 是两套不同的配置，不能混淆。
-
-截图中如果还看到以下旧变量，可以删除，不需要再设置：
-
-- `ALLOWED_EMAILS`：旧版邮箱配置，当前白名单由 D1 的 `registration_allowlist` 表管理。
-- `SIGNUPS_ALLOWLIST_ONLY`：旧版注册开关，当前项目不读取该变量。
-
-当前项目实际使用的是 `ADMIN_EMAIL`、`SIGNUPS_ALLOWED` 和上述 JWT/TOTP Secrets。白名单邮箱通过 `/admin.html` 写入生产 D1，不是 Cloudflare Worker 环境变量。
-
-在 GitHub 仓库的 `Settings → Environments → production` 中创建/选择 `production` Environment，并在 **Environment secrets** 中添加以下机密，不要放在普通的 Variables 中：
-
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ACCOUNT_ID`
-- `PRODUCTION_BASE_URL`（可选；设置后自动执行 smoke test）
-
-其中：
-
-- `CLOUDFLARE_API_TOKEN` 必须是该 Cloudflare 账户的 API Token，不能使用其他账户的 Token。
-- `CLOUDFLARE_ACCOUNT_ID` 必须填写 `2a863f1907f04c91e31378c111cd4a26` 这类 32 位 Cloudflare **帐户 ID**，不是 Zone ID/区域 ID。
-- `wrangler.production.jsonc` 不固定任何账户 ID；workflow 通过 `CLOUDFLARE_ACCOUNT_ID` 环境变量指定目标账户，便于其他人复用仓库。
-- 如果把值放在 GitHub 的 `Variables` 而不是 `Secrets`，当前 workflow 不会读取到它们；请移动到 `production` Environment secrets。
-- API Token 必须包含以下账户级权限，并且 Token 所属账户必须与 `CLOUDFLARE_ACCOUNT_ID` 一致：
-  - `Workers Scripts: Edit`：上传、发布 Worker 和 Durable Object 类，必须有。
-  - `D1: Edit`：执行生产数据库 migration，必须有。
-  - `Account Settings: Read`：允许 Wrangler 读取账户设置，建议添加。
-- `Workers AI` 权限与本项目部署无关，不需要添加。
-- 创建 Token 时，`Account Resources` 必须选择目标 Cloudflare 账户，不能只选择其他账户或仅依赖用户级权限。
-
-建议给 `production` Environment 设置审批人或保护规则，让 `main` 推送后先等待人工批准。
-
-自动部署步骤为：
-
-1. 推送代码到 GitHub `main`。
-2. GitHub Actions 检出代码并安装 Rust/WASM 工具链。
-3. 校验 Web Vault 版本并构建 Worker。
-4. 应用 `sql/migrations` 中尚未执行的生产 D1 migration。
-5. 执行 `wrangler deploy --config wrangler.production.jsonc`，DO migration 自动处理。
-6. 如果设置了 `PRODUCTION_BASE_URL`，执行 `/api/config`、`/api/version` 和 `/api/alive` 检查。
-
-首次上线仍建议先人工执行一次初始化、配置 Secrets 和管理员账号；之后正常合并到 `main` 即可自动部署。
+注意：`CLOUDFLARE_API_TOKEN` 只是 GitHub Actions 调用 Cloudflare API 的凭据，不会自动成为 Worker Secret；运行时的 JWT、TOTP、管理员和注册开关由 workflow 显式同步。D1 名称、D1 ID、Worker 名称不会再硬编码到自动部署配置；模板见 `wrangler.deploy.template.jsonc`，渲染脚本见 `scripts/render-wrangler-config.mjs`。
 
 ### 9. 备份、升级和回滚
 

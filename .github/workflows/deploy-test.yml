@@ -1,14 +1,12 @@
-name: Deploy production
+name: Deploy test
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       ref:
         description: Git ref to deploy
         required: true
-        default: main
+        default: develop
         type: string
 
 permissions:
@@ -17,7 +15,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: production
+    environment: test
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,7 +36,7 @@ jobs:
         run: npm install --global wrangler@4.114.0
       - name: Render deployment config
         env:
-          WORKER_NAME: ${{ vars.WORKER_NAME || 'warden-worker' }}
+          WORKER_NAME: ${{ vars.WORKER_NAME || 'warden-worker-test' }}
           D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
           D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
         run: node scripts/render-wrangler-config.mjs wrangler.deploy.template.jsonc /tmp/wrangler.deploy.jsonc
@@ -46,11 +44,8 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing production secret: CLOUDFLARE_API_TOKEN"; exit 1; }
-          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "Missing production secret: CLOUDFLARE_ACCOUNT_ID"; exit 1; }
-          test "${#CLOUDFLARE_ACCOUNT_ID}" -eq 32 || { echo "CLOUDFLARE_ACCOUNT_ID must be a 32-character account ID"; exit 1; }
-      - name: Apply production migrations
+        run: test -n "$CLOUDFLARE_API_TOKEN" && test "${#CLOUDFLARE_ACCOUNT_ID}" -eq 32
+      - name: Apply test migrations
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -72,7 +67,7 @@ jobs:
           sync_secret TWO_FACTOR_ENC_KEY TWO_FACTOR_ENC_KEY
           sync_secret ADMIN_EMAIL ADMIN_EMAIL
           sync_secret SIGNUPS_ALLOWED SIGNUPS_ALLOWED
-      - name: Deploy production Worker
+      - name: Deploy test Worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -80,6 +75,6 @@ jobs:
         run: wrangler deploy --config /tmp/wrangler.deploy.jsonc
       - name: Smoke test
         env:
-          PRODUCTION_BASE_URL: ${{ vars.BASE_URL }}
-        if: ${{ env.PRODUCTION_BASE_URL != '' }}
-        run: ./scripts/smoke-test.sh "$PRODUCTION_BASE_URL"
+          TEST_BASE_URL: ${{ vars.BASE_URL }}
+        if: ${{ env.TEST_BASE_URL != '' }}
+        run: ./scripts/smoke-test.sh "$TEST_BASE_URL"

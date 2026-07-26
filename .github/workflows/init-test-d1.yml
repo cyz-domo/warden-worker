@@ -1,4 +1,4 @@
-name: Initialize production D1
+name: Initialize test D1
 
 on:
   workflow_dispatch:
@@ -9,18 +9,18 @@ permissions:
 jobs:
   initialize:
     runs-on: ubuntu-latest
-    environment: production
+    environment: test
     steps:
       - uses: actions/checkout@v4
       - name: Install Wrangler
         run: npm install --global wrangler@4.114.0
       - name: Render deployment config
         env:
-          WORKER_NAME: ${{ vars.WORKER_NAME || 'warden-worker' }}
+          WORKER_NAME: ${{ vars.WORKER_NAME || 'warden-worker-test' }}
           D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
           D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
         run: node scripts/render-wrangler-config.mjs wrangler.deploy.template.jsonc /tmp/wrangler.deploy.jsonc
-      - name: Initialize empty production database
+      - name: Initialize empty test database
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -28,17 +28,17 @@ jobs:
           set -euo pipefail
           wrangler d1 execute vault1 --remote --config /tmp/wrangler.deploy.jsonc \
             --command "SELECT (SELECT COUNT(1) FROM users) AS users, (SELECT COUNT(1) FROM ciphers) AS ciphers, (SELECT COUNT(1) FROM folders) AS folders, (SELECT COUNT(1) FROM sends) AS sends, (SELECT COUNT(1) FROM send_files) AS send_files" \
-            --json > /tmp/production-d1-state.json
+            --json > /tmp/test-d1-state.json
           node - <<'NODE'
           const fs = require('fs');
-          const payload = JSON.parse(fs.readFileSync('/tmp/production-d1-state.json', 'utf8'));
+          const payload = JSON.parse(fs.readFileSync('/tmp/test-d1-state.json', 'utf8'));
           const row = payload?.[0]?.results?.[0];
-          if (!row) throw new Error('Could not read production D1 state; initialization aborted');
+          if (!row) throw new Error('Could not read test D1 state; initialization aborted');
           const counts = Object.fromEntries(Object.entries(row).map(([key, value]) => [key, Number(value || 0)]));
           const populated = Object.entries(counts).filter(([, value]) => value > 0);
           if (populated.length) {
-            throw new Error(`Production D1 is not empty (${populated.map(([key, value]) => `${key}=${value}`).join(', ')}); refusing to run schema_full.sql`);
+            throw new Error(`Test D1 is not empty (${populated.map(([key, value]) => `${key}=${value}`).join(', ')}); refusing to run schema_full.sql`);
           }
-          console.log('Production D1 is empty; safe to initialize.');
+          console.log('Test D1 is empty; safe to initialize.');
           NODE
           wrangler d1 execute vault1 --remote --config /tmp/wrangler.deploy.jsonc --file sql/schema_full.sql
