@@ -21,22 +21,9 @@ fn normalize_email(email: &str) -> Result<String, AppError> {
 
 async fn require_admin(
     claims: &Claims,
-    headers: &HeaderMap,
+    _headers: &HeaderMap,
     env: &Arc<Env>,
 ) -> Result<(), AppError> {
-    let has_bearer = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .map(|value| {
-            let token = value.strip_prefix("Bearer ").unwrap_or_default().trim();
-            !token.is_empty()
-        })
-        .unwrap_or(false);
-    if !has_bearer {
-        return Err(AppError::Unauthorized(
-            "Administrator API requires a Bearer token".to_string(),
-        ));
-    }
     let configured = env
         .secret("ADMIN_EMAIL")
         .or_else(|_| env.var("ADMIN_EMAIL"))
@@ -68,6 +55,14 @@ async fn require_admin(
         ));
     }
     Ok(())
+}
+
+pub async fn require_admin_page(
+    claims: &Claims,
+    headers: &HeaderMap,
+    env: &Arc<Env>,
+) -> Result<(), AppError> {
+    require_admin(claims, headers, env).await
 }
 
 async fn ensure_table(db: &worker::D1Database) -> Result<(), AppError> {

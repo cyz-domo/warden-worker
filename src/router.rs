@@ -1,4 +1,4 @@
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::header::{
     HeaderName, HeaderValue, CONTENT_SECURITY_POLICY, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS,
 };
@@ -10,9 +10,13 @@ use axum::{
 use std::sync::Arc;
 use worker::Env;
 
-use crate::handlers::{
-    accounts, admin, ciphers, config, devices, folders, identity, import, sends, sync, two_factor,
-    usage,
+use crate::{
+    auth::Claims,
+    error::AppError,
+    handlers::{
+        accounts, admin, ciphers, config, devices, folders, identity, import, sends, sync,
+        two_factor, usage,
+    },
 };
 
 pub fn api_router(env: Env) -> Router {
@@ -50,14 +54,8 @@ pub fn api_router(env: Env) -> Router {
         )
         .route("/api/accounts/profile", get(accounts::profile))
         .route("/api/accounts/revision-date", get(accounts::revision_date))
-        .route(
-            "/api/accounts",
-            delete(accounts::delete_account),
-        )
-        .route(
-            "/api/accounts/delete",
-            post(accounts::delete_account_post),
-        )
+        .route("/api/accounts", delete(accounts::delete_account))
+        .route("/api/accounts/delete", post(accounts::delete_account_post))
         .route("/api/devices", get(devices::get_devices))
         .route(
             "/api/devices/identifier/{id}",
@@ -167,7 +165,13 @@ pub fn api_router(env: Env) -> Router {
         .with_state(app_state)
 }
 
-async fn admin_page() -> Response {
+#[worker::send]
+async fn admin_page(
+    claims: Claims,
+    headers: axum::http::HeaderMap,
+    State(env): State<Arc<Env>>,
+) -> Result<Response, AppError> {
+    admin::require_admin_page(&claims, &headers, &env).await?;
     let mut response = Html(include_str!("../static/admin.html")).into_response();
     let headers = response.headers_mut();
     headers.insert(CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"));
@@ -177,5 +181,5 @@ async fn admin_page() -> Response {
         HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
-    response
+    Ok(response)
 }

@@ -9,14 +9,14 @@
   </style>
 </head>
 <body>
-  <h1>Warden 管理后台</h1><p class="muted">使用当前管理员登录后的 Bearer Token。页面不会上传或保存令牌。</p>
-  <div class="bar"><input id="token" type="password" placeholder="粘贴 Bearer Token（不含 Bearer）"><button onclick="loadAll()">加载数据</button><span id="msg"></span></div>
+  <h1>Warden 管理后台</h1><p class="muted">仅管理员登录会话可访问。</p>
+  <div class="bar"><button onclick="loadAll()">加载数据</button><span id="msg"></span></div>
   <div class="cards"><div class="card">用户总数<div class="num" id="users">-</div></div><div class="card">已启用验证器 App<div class="num" id="totp">-</div></div><div class="card">白名单记录<div class="num" id="allowlist">-</div></div><div class="card">启用白名单<div class="num" id="enabled">-</div></div></div>
   <section><h2>注册邮箱白名单</h2><div class="bar"><input id="email" type="email" placeholder="user@example.com"><button onclick="addEmail()">添加/更新</button></div><table><thead><tr><th>邮箱</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="allowlistRows"></tbody></table></section>
   <section><h2>用户</h2><table><thead><tr><th>邮箱</th><th>名称</th><th>注册时间</th><th>验证器 App</th></tr></thead><tbody id="userRows"></tbody></table></section>
   <script>
     const $ = id => document.getElementById(id);
-    const headers = () => ({ Authorization: `Bearer ${$('token').value.trim()}`, 'Content-Type': 'application/json' });
+    const headers = () => ({ 'Content-Type': 'application/json' });
     const escapeText = value => String(value ?? '');
     async function api(path, options = {}) {
       const response = await fetch(path, { ...options, headers: { ...headers(), ...(options.headers || {}) } });
