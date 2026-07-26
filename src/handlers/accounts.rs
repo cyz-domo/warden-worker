@@ -12,6 +12,7 @@ use crate::{
     auth::Claims,
     db,
     error::AppError,
+    handlers::two_factor::PasswordOrOtpData,
     models::user::{KeyData, PreloginResponse, RegisterRequest, User},
     two_factor,
 };
@@ -51,6 +52,13 @@ pub struct DeleteAccountRequest {
     pub master_password_hash: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProfileRequest {
+    pub name: Option<String>,
+    pub culture: Option<String>,
+}
+
 #[worker::send]
 pub async fn profile(claims: Claims, State(env): State<Arc<Env>>) -> Result<Json<Value>, AppError> {
     let db = db::get_db(&env)?;
@@ -80,8 +88,51 @@ pub async fn profile(claims: Claims, State(env): State<Arc<Env>>) -> Result<Json
 }
 
 #[worker::send]
+pub async fn update_profile(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Json(payload): Json<UpdateProfileRequest>,
+) -> Result<Json<Value>, AppError> {
+    let db = db::get_db(&env)?;
+    let name = payload.name.map(|value| value.trim().to_string());
+    let name = name.filter(|value| !value.is_empty());
+    let now = Utc::now().to_rfc3339();
+
+    db.prepare("UPDATE users SET name = ?1, updated_at = ?2 WHERE id = ?3")
+        .bind(&[name.clone().into(), now.into(), claims.sub.clone().into()])?
+        .run()
+        .await
+        .map_err(|_| AppError::Database)?;
+
+    profile(claims, State(env)).await
+}
+
+#[worker::send]
 pub async fn revision_date(_claims: Claims) -> Result<Json<i64>, AppError> {
     Ok(Json(chrono::Utc::now().timestamp_millis()))
+}
+
+#[worker::send]
+pub async fn security_stamp(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Json(payload): Json<PasswordOrOtpData>,
+) -> Result<StatusCode, AppError> {
+    let db = db::get_db(&env)?;
+    payload.validate(&db, &claims.sub, &env).await?;
+    let now = Utc::now().to_rfc3339();
+    let stamp = Uuid::new_v4().to_string();
+
+    db.batch(vec![
+        db.prepare("UPDATE users SET security_stamp = ?1, updated_at = ?2 WHERE id = ?3")
+            .bind(&[stamp.into(), now.clone().into(), claims.sub.clone().into()])?,
+        db.prepare("DELETE FROM devices WHERE user_id = ?1")
+            .bind(&[claims.sub.into()])?,
+    ])
+    .await
+    .map_err(|_| AppError::Database)?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn delete_account_impl(

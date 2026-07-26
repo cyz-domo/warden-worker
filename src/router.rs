@@ -52,8 +52,15 @@ pub fn api_router(env: Env) -> Router {
             "/identity/accounts/register/verification-email-clicked",
             post(accounts::verification_email_clicked),
         )
-        .route("/api/accounts/profile", get(accounts::profile))
+        .route(
+            "/api/accounts/profile",
+            get(accounts::profile).put(accounts::update_profile),
+        )
         .route("/api/accounts/revision-date", get(accounts::revision_date))
+        .route(
+            "/api/accounts/security-stamp",
+            post(accounts::security_stamp),
+        )
         .route("/api/accounts", delete(accounts::delete_account))
         .route("/api/accounts/delete", post(accounts::delete_account_post))
         .route("/api/devices", get(devices::get_devices))
@@ -133,6 +140,7 @@ pub fn api_router(env: Env) -> Router {
         .route("/api/sync", get(sync::get_sync_data))
         // Ciphers CRUD
         .route("/api/ciphers/create", post(ciphers::create_cipher))
+        .route("/api/ciphers/purge", post(ciphers::purge_personal_vault))
         .route(
             "/api/ciphers",
             post(ciphers::post_ciphers).delete(ciphers::hard_delete_ciphers_delete),
