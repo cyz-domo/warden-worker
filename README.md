@@ -222,11 +222,18 @@ wrangler secret put TWO_FACTOR_ENC_KEY --config wrangler.production.jsonc
 
 当前项目实际使用的是 `ADMIN_EMAIL`、`SIGNUPS_ALLOWED` 和上述 JWT/TOTP Secrets。白名单邮箱通过 `/admin.html` 写入生产 D1，不是 Cloudflare Worker 环境变量。
 
-在 GitHub 仓库的 `Settings → Environments` 中创建 `production` Environment，并添加以下 Secrets：
+在 GitHub 仓库的 `Settings → Environments → production` 中创建/选择 `production` Environment，并在 **Environment secrets** 中添加以下机密，不要放在普通的 Variables 中：
 
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
 - `PRODUCTION_BASE_URL`（可选；设置后自动执行 smoke test）
+
+其中：
+
+- `CLOUDFLARE_API_TOKEN` 必须是该 Cloudflare 账户的 API Token，不能使用其他账户的 Token。
+- `CLOUDFLARE_ACCOUNT_ID` 必须填写 `2a863f1907f04c91e31378c111cd4a26` 这类 32 位 Cloudflare **帐户 ID**，不是 Zone ID/区域 ID。
+- 如果把值放在 GitHub 的 `Variables` 而不是 `Secrets`，当前 workflow 不会读取到它们；请移动到 `production` Environment secrets。
+- API Token 需要目标帐户的 `Workers Scripts`、`D1` 和 Durable Objects 相关权限，并且 Token 所属账户必须与 `CLOUDFLARE_ACCOUNT_ID` 一致。
 
 API Token 需要目标账户的 Workers、D1 和 Durable Objects 相关权限。建议给 `production` Environment 设置审批人或保护规则，让 `main` 推送后先等待人工批准。
 
