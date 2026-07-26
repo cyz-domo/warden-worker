@@ -56,7 +56,10 @@ impl IntoResponse for AppError {
             ),
         };
 
-        let body = Json(json!({ "error": error_message }));
+        let body = Json(json!({
+            "error": error_message,
+            "error_description": error_message
+        }));
         (status, body).into_response()
     }
 }
