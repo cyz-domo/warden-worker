@@ -22,11 +22,13 @@ pub struct Claims {
     pub amr: Vec<String>,
 }
 
-impl FromRequestParts<Arc<Env>> for Claims
-{
+impl FromRequestParts<Arc<Env>> for Claims {
     type Rejection = AppError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &Arc<Env>) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<Env>,
+    ) -> Result<Self, Self::Rejection> {
         let token = parts
             .headers
             .get(header::AUTHORIZATION)

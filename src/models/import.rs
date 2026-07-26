@@ -10,6 +10,7 @@ pub struct ImportCipher {
     pub organization_id: Option<String>,
     pub name: String,
     pub notes: Option<String>,
+    #[serde(default)]
     pub favorite: bool,
     pub login: Option<Value>,
     pub card: Option<Value>,
@@ -19,14 +20,13 @@ pub struct ImportCipher {
     pub password_history: Option<Value>,
     pub reprompt: Option<i32>,
     pub last_known_revision_date: Option<String>,
-    pub encrypted_for: String,
+    pub encrypted_for: Option<String>,
 }
-
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportFolder {
-    pub id: String,
+    pub id: Option<String>,
     pub name: String,
 }
 
@@ -40,8 +40,31 @@ pub struct FolderRelationship {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportRequest {
+    #[serde(default)]
     pub ciphers: Vec<ImportCipher>,
+    #[serde(default)]
     pub folders: Vec<ImportFolder>,
     #[serde(default)]
     pub folder_relationships: Vec<FolderRelationship>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ImportRequest;
+
+    #[test]
+    fn accepts_import_payload_with_generated_folder_ids() {
+        let payload: ImportRequest = serde_json::from_str(
+            r#"{
+                "ciphers": [{"type": 1, "name": "item", "login": null}],
+                "folders": [{"name": "folder"}],
+                "folderRelationships": [{"key": 0, "value": 0}]
+            }"#,
+        )
+        .expect("import payload should deserialize");
+
+        assert!(payload.ciphers[0].encrypted_for.is_none());
+        assert!(!payload.ciphers[0].favorite);
+        assert!(payload.folders[0].id.is_none());
+    }
 }

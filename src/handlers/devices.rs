@@ -1,5 +1,5 @@
-use axum::{extract::State, http::HeaderMap, Json};
 use axum::extract::Path;
+use axum::{extract::State, http::HeaderMap, Json};
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
 use serde::Deserialize;
@@ -37,7 +37,10 @@ async fn ensure_devices_table(db: &worker::D1Database) -> Result<(), AppError> {
 }
 
 fn header_str(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers.get(name).and_then(|v| v.to_str().ok()).map(|s| s.to_string())
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
 }
 
 fn header_i64(headers: &HeaderMap, name: &str) -> Option<i64> {
@@ -99,9 +102,13 @@ pub async fn knowndevice(
 
     let email_bytes = general_purpose::URL_SAFE_NO_PAD
         .decode(email_b64.as_bytes())
-        .map_err(|_| AppError::BadRequest("X-Request-Email value failed to decode as base64url".to_string()))?;
+        .map_err(|_| {
+            AppError::BadRequest("X-Request-Email value failed to decode as base64url".to_string())
+        })?;
     let email = String::from_utf8(email_bytes)
-        .map_err(|_| AppError::BadRequest("X-Request-Email value failed to decode as UTF-8".to_string()))?
+        .map_err(|_| {
+            AppError::BadRequest("X-Request-Email value failed to decode as UTF-8".to_string())
+        })?
         .to_lowercase();
 
     let user_id: Option<String> = db
@@ -116,7 +123,9 @@ pub async fn knowndevice(
     };
 
     let exists: Option<i64> = db
-        .prepare("SELECT 1 AS ok FROM devices WHERE user_id = ?1 AND device_identifier = ?2 LIMIT 1")
+        .prepare(
+            "SELECT 1 AS ok FROM devices WHERE user_id = ?1 AND device_identifier = ?2 LIMIT 1",
+        )
         .bind(&[user_id.into(), device_identifier.into()])?
         .first(Some("ok"))
         .await
@@ -194,7 +203,11 @@ pub async fn get_devices(
     let data = rows
         .into_iter()
         .map(|row| {
-            let id = row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let id = row
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let identifier = row
                 .get("device_identifier")
                 .and_then(|v| v.as_str())
@@ -307,7 +320,11 @@ pub async fn get_device_by_identifier(
         .get("device_name")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let row_id = row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let row_id = row
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let row_created_at = row
         .get("created_at")
         .and_then(|v| v.as_str())

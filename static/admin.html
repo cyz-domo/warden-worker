@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Warden 管理后台</title>
+  <style>
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:1100px;margin:32px auto;padding:0 16px;color:#172033;background:#f6f8fc}h1{margin-bottom:8px}.muted{color:#64748b}.bar,.card,table{background:#fff;border:1px solid #dbe3ef;border-radius:12px}.bar{padding:16px;display:flex;gap:8px;flex-wrap:wrap}.bar input{flex:1;min-width:260px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:16px 0}.card{padding:16px}.num{font-size:28px;font-weight:700;margin-top:8px}input,button{font:inherit;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px}button{cursor:pointer;background:#172033;color:#fff}button.secondary{background:#fff;color:#172033}button.danger{background:#b42318}section{margin:18px 0}table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden}th,td{text-align:left;padding:11px;border-bottom:1px solid #e5eaf1}th{background:#f8fafc}tr:last-child td{border-bottom:0}.ok{color:#087443}.error{color:#b42318;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+  <h1>Warden 管理后台</h1><p class="muted">使用当前管理员登录后的 Bearer Token。页面不会上传或保存令牌。</p>
+  <div class="bar"><input id="token" type="password" placeholder="粘贴 Bearer Token（不含 Bearer）"><button onclick="loadAll()">加载数据</button><span id="msg"></span></div>
+  <div class="cards"><div class="card">用户总数<div class="num" id="users">-</div></div><div class="card">已启用验证器 App<div class="num" id="totp">-</div></div><div class="card">白名单记录<div class="num" id="allowlist">-</div></div><div class="card">启用白名单<div class="num" id="enabled">-</div></div></div>
+  <section><h2>注册邮箱白名单</h2><div class="bar"><input id="email" type="email" placeholder="user@example.com"><button onclick="addEmail()">添加/更新</button></div><table><thead><tr><th>邮箱</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="allowlistRows"></tbody></table></section>
+  <section><h2>用户</h2><table><thead><tr><th>邮箱</th><th>名称</th><th>注册时间</th><th>验证器 App</th></tr></thead><tbody id="userRows"></tbody></table></section>
+  <script>
+    const $ = id => document.getElementById(id);
+    const headers = () => ({ Authorization: `Bearer ${$('token').value.trim()}`, 'Content-Type': 'application/json' });
+    const escapeText = value => String(value ?? '');
+    async function api(path, options = {}) {
+      const response = await fetch(path, { ...options, headers: { ...headers(), ...(options.headers || {}) } });
+      const text = await response.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch {}
+      if (!response.ok) throw Error(data.error || `HTTP ${response.status}`);
+      return data;
+    }
+    function message(text, ok = false) { $('msg').textContent = text; $('msg').className = ok ? 'ok' : 'error'; }
+    function cell(row, value) { const element = document.createElement('td'); element.textContent = escapeText(value); row.appendChild(element); return element; }
+    function button(label, className, action) { const element = document.createElement('button'); element.textContent = label; element.className = className; element.addEventListener('click', action); return element; }
+    function renderAllowlist(items) {
+      const body = $('allowlistRows'); body.replaceChildren();
+      for (const item of items) { const row = document.createElement('tr'); cell(row, item.email); cell(row, item.enabled ? '启用' : '禁用'); cell(row, item.updated_at);
+        const actions = document.createElement('td'); actions.append(button(item.enabled ? '禁用' : '启用', 'secondary', () => toggle(item.email, !item.enabled)), document.createTextNode(' '), button('删除', 'danger', () => removeEmail(item.email))); row.appendChild(actions); body.appendChild(row); }
+    }
+    function renderUsers(items) {
+      const body = $('userRows'); body.replaceChildren();
+      for (const item of items) { const row = document.createElement('tr'); cell(row, item.email); cell(row, item.name); cell(row, item.created_at); cell(row, item.two_factor_enabled ? '已启用' : '未启用'); body.appendChild(row); }
+    }
+    async function loadAll() { try { const [summary, allowlist, users] = await Promise.all([api('/api/admin/summary'), api('/api/admin/allowlist'), api('/api/admin/users')]); $('users').textContent = summary.users; $('totp').textContent = summary.totpEnabled; $('allowlist').textContent = summary.allowlist; $('enabled').textContent = summary.allowlistEnabled; renderAllowlist(allowlist.data || []); renderUsers(users.data || []); message('加载成功', true); } catch (error) { message(error.message); } }
+    async function addEmail() { try { await api('/api/admin/allowlist', { method: 'POST', body: JSON.stringify({ email: $('email').value, enabled: true }) }); $('email').value = ''; await loadAll(); } catch (error) { message(error.message); } }
+    async function toggle(email, enabled) { try { await api(`/api/admin/allowlist/${encodeURIComponent(email)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }); await loadAll(); } catch (error) { message(error.message); } }
+    async function removeEmail(email) { if (!confirm('确认删除该邮箱？')) return; try { await api(`/api/admin/allowlist/${encodeURIComponent(email)}`, { method: 'DELETE' }); await loadAll(); } catch (error) { message(error.message); } }
+  </script>
+</body>
+</html>

@@ -2,8 +2,8 @@ use axum::{extract::State, Json};
 use chrono::Utc;
 use std::sync::Arc;
 use uuid::Uuid;
-use worker::{D1Database, D1PreparedStatement, Env};
 use wasm_bindgen::JsValue;
+use worker::{D1Database, D1PreparedStatement, Env};
 
 use crate::auth::Claims;
 use crate::db;
@@ -24,12 +24,28 @@ pub async fn import_data(
     let now = Utc::now();
     let now = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
+    for import_cipher in &payload.ciphers {
+        if let Some(encrypted_for) = &import_cipher.encrypted_for {
+            if encrypted_for != &claims.sub {
+                return Err(AppError::BadRequest(
+                    "Cipher encrypted for wrong user".to_string(),
+                ));
+            }
+        }
+    }
+
+    for import_folder in &mut payload.folders {
+        if import_folder.id.is_none() {
+            import_folder.id = Some(Uuid::new_v4().to_string());
+        }
+    }
+
     let folder_query = "INSERT OR IGNORE INTO folders (id, user_id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)";
 
     let mut folder_stmts: Vec<D1PreparedStatement> = Vec::new();
     for import_folder in &payload.folders {
         let folder = Folder {
-            id: import_folder.id.clone(),
+            id: import_folder.id.clone().ok_or(AppError::Internal)?,
             user_id: claims.sub.clone(),
             name: import_folder.name.clone(),
             created_at: now.clone(),
@@ -53,7 +69,7 @@ pub async fn import_data(
     for relationship in payload.folder_relationships {
         if let Some(cipher) = payload.ciphers.get_mut(relationship.key) {
             if let Some(folder) = payload.folders.get(relationship.value) {
-                cipher.folder_id = Some(folder.id.clone());
+                cipher.folder_id = folder.id.clone();
             }
         }
     }
@@ -62,10 +78,6 @@ pub async fn import_data(
 
     let mut cipher_stmts: Vec<D1PreparedStatement> = Vec::new();
     for import_cipher in payload.ciphers {
-        if import_cipher.encrypted_for != claims.sub {
-            return Err(AppError::BadRequest("Cipher encrypted for wrong user".to_string()));
-        }
-
         let cipher_data = CipherData {
             name: import_cipher.name,
             notes: import_cipher.notes,

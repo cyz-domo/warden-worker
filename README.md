@@ -53,13 +53,13 @@ wrangler d1 execute vault1 --remote --file=sql/schema_full.sql
 ```bash
 wrangler secret put JWT_SECRET
 wrangler secret put JWT_REFRESH_SECRET
-wrangler secret put ALLOWED_EMAILS
 wrangler secret put TWO_FACTOR_ENC_KEY
+wrangler secret put ADMIN_EMAIL
 ```
 
 - JWT_SECRET：访问令牌签名密钥
 - JWT_REFRESH_SECRET：刷新令牌签名密钥
-- ALLOWED_EMAILS：首个账号注册白名单（仅在“数据库还没有任何用户”时启用），多个邮箱用英文逗号分隔
+- ADMIN_EMAIL：唯一管理员邮箱，用于访问 `/admin.html` 管理后台
 - TWO_FACTOR_ENC_KEY：可选，Base64 的 32 字节密钥；用于加密存储 TOTP 秘钥（不设置则以 `plain:` 形式存储）
 
 ### 4. 部署
@@ -100,7 +100,8 @@ GitHub Actions 需要配置 `test` 与 `production` Environments，并分别设�
 
 构建会校验 `static/web-vault/version.json` 与 `vw-version.json`，并将版本同步返回到 `/api/config` 和 `/api/version`。D1 migration 使用增量 SQL，不要在生产 workflow 中执行 `sql/schema_full.sql`。
 
-注册策略由 `SIGNUPS_ALLOWED`、`SIGNUPS_ALLOWLIST_ONLY` 和 `ALLOWED_EMAILS` 控制。测试环境使用 `SIGNUPS_ALLOWED=true`、`SIGNUPS_ALLOWLIST_ONLY=true`；生产环境可使用 `SIGNUPS_ALLOWED=true`、`SIGNUPS_ALLOWLIST_ONLY=false` 开放公开注册。
+注册总开关由 `SIGNUPS_ALLOWED` 控制。注册邮箱白名单由 D1 的 `registration_allowlist` 表控制：表为空时允许所有邮箱；表中有记录时仅允许 `enabled=1` 的邮箱。部署 migration 后访问 `/admin.html` 管理白名单和查看用户统计。
+
 
 首次创建空的测试或生产 D1 时，只运行对应的 `Initialize test D1`/`Initialize production D1` 手动 workflow 一次。该步骤会执行 `sql/schema_full.sql`，会清空目标数据库；数据库已有数据时禁止运行。
 

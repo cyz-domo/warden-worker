@@ -62,12 +62,35 @@ pub struct PreloginResponse {
 pub struct RegisterRequest {
     pub name: Option<String>,
     pub email: String,
-    pub master_password_hash: String,
+    pub master_password_hash: Option<String>,
     pub master_password_hint: Option<String>,
-    pub user_symmetric_key: String,
-    pub user_asymmetric_keys: KeyData,
-    pub kdf: i32,
-    pub kdf_iterations: i32,
+    pub user_symmetric_key: Option<String>,
+    pub user_asymmetric_keys: Option<KeyData>,
+    pub kdf: Option<i32>,
+    pub kdf_iterations: Option<i32>,
+    pub master_password_authentication: Option<MasterPasswordAuthentication>,
+    pub master_password_unlock: Option<MasterPasswordUnlock>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MasterPasswordAuthentication {
+    pub master_password_authentication_hash: String,
+    pub kdf: Option<KdfConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MasterPasswordUnlock {
+    pub master_key_wrapped_user_key: String,
+    pub kdf: Option<KdfConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KdfConfig {
+    pub kdf_type: Option<i32>,
+    pub iterations: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]

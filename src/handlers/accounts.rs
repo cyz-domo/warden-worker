@@ -45,21 +45,14 @@ pub struct ChangeEmailRequest {
 }
 
 #[worker::send]
-pub async fn profile(
-    claims: Claims,
-    State(env): State<Arc<Env>>,
-) -> Result<Json<Value>, AppError> {
+pub async fn profile(claims: Claims, State(env): State<Arc<Env>>) -> Result<Json<Value>, AppError> {
     let db = db::get_db(&env)?;
     let two_factor_enabled = two_factor::is_authenticator_enabled(&db, &claims.sub).await?;
-    let user: User = query!(
-        &db,
-        "SELECT * FROM users WHERE id = ?1",
-        claims.sub
-    )
-    .map_err(|_| AppError::Database)?
-    .first(None)
-    .await?
-    .ok_or(AppError::NotFound("User not found".to_string()))?;
+    let user: User = query!(&db, "SELECT * FROM users WHERE id = ?1", claims.sub)
+        .map_err(|_| AppError::Database)?
+        .first(None)
+        .await?
+        .ok_or(AppError::NotFound("User not found".to_string()))?;
 
     Ok(Json(json!({
         "id": user.id,
@@ -80,9 +73,7 @@ pub async fn profile(
 }
 
 #[worker::send]
-pub async fn revision_date(
-    _claims: Claims,
-) -> Result<Json<i64>, AppError> {
+pub async fn revision_date(_claims: Claims) -> Result<Json<i64>, AppError> {
     Ok(Json(chrono::Utc::now().timestamp_millis()))
 }
 
@@ -112,17 +103,52 @@ pub async fn prelogin(
 }
 
 #[worker::send]
+pub async fn prelogin_password(
+    State(env): State<Arc<Env>>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let email = payload["email"]
+        .as_str()
+        .ok_or_else(|| AppError::BadRequest("Missing email".to_string()))?;
+    let db = db::get_db(&env)?;
+    let row: Option<serde_json::Value> = db
+        .prepare("SELECT kdf_type, kdf_iterations FROM users WHERE email = ?1")
+        .bind(&[email.to_lowercase().into()])?
+        .first(None)
+        .await
+        .map_err(|_| AppError::Database)?;
+    let kdf = row
+        .as_ref()
+        .and_then(|value| value.get("kdf_type"))
+        .and_then(|value| value.as_i64())
+        .unwrap_or(0);
+    let iterations = row
+        .as_ref()
+        .and_then(|value| value.get("kdf_iterations"))
+        .and_then(|value| value.as_i64())
+        .unwrap_or(600_000);
+
+    Ok(Json(json!({
+        "kdf": kdf,
+        "kdfIterations": iterations,
+        "kdfMemory": null,
+        "kdfParallelism": null,
+        "kdfSettings": {
+            "kdfType": kdf,
+            "iterations": iterations,
+            "memory": null,
+            "parallelism": null
+        },
+        "salt": null
+    })))
+}
+
+#[worker::send]
 pub async fn register(
     State(env): State<Arc<Env>>,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<Json<Value>, AppError> {
     let db = db::get_db(&env)?;
-    let user_count: Option<i64> = db
-        .prepare("SELECT COUNT(1) AS user_count FROM users")
-        .first(Some("user_count"))
-        .await
-        .map_err(|_| AppError::Database)?;
-    let _user_count = user_count.unwrap_or(0);
     let signups_allowed = env
         .secret("SIGNUPS_ALLOWED")
         .ok()
@@ -132,38 +158,72 @@ pub async fn register(
         return Err(AppError::Unauthorized("Signups are disabled".to_string()));
     }
 
-    let allowlist_only = env
-        .secret("SIGNUPS_ALLOWLIST_ONLY")
-        .ok()
-        .and_then(|secret| secret.to_string().parse::<bool>().ok())
-        .unwrap_or(true);
-    if allowlist_only {
-        let allowed_emails = env
-            .secret("ALLOWED_EMAILS")
-            .map_err(|_| AppError::Internal)?
-            .to_string();
-        let requested_email = payload.email.trim().to_lowercase();
-        if allowed_emails
-            .split(',')
-            .map(|email| email.trim().to_lowercase())
-            .all(|email| email != requested_email)
-        {
-            return Err(AppError::Unauthorized("Email is not allowlisted".to_string()));
+    let requested_email = payload.email.trim().to_lowercase();
+    db.prepare(
+        "CREATE TABLE IF NOT EXISTS registration_allowlist (
+            email TEXT PRIMARY KEY NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+    )
+    .run()
+    .await
+    .map_err(|_| AppError::Database)?;
+    let allowlist_count: Option<i64> = db
+        .prepare("SELECT COUNT(1) AS count FROM registration_allowlist")
+        .first(Some("count"))
+        .await
+        .map_err(|_| AppError::Database)?;
+    if allowlist_count.unwrap_or(0) > 0 {
+        let allowed: Option<i64> = db
+            .prepare("SELECT enabled FROM registration_allowlist WHERE email = ?1")
+            .bind(&[requested_email.clone().into()])?
+            .first(Some("enabled"))
+            .await
+            .map_err(|_| AppError::Database)?;
+        if allowed != Some(1) {
+            return Err(AppError::Unauthorized(
+                "Email is not allowlisted".to_string(),
+            ));
         }
     }
     let now = Utc::now().to_rfc3339();
+    let auth = payload.master_password_authentication.as_ref();
+    let unlock = payload.master_password_unlock.as_ref();
+    let master_password_hash = payload
+        .master_password_hash
+        .or_else(|| auth.map(|value| value.master_password_authentication_hash.clone()))
+        .ok_or_else(|| AppError::BadRequest("Missing masterPasswordHash".to_string()))?;
+    let user_symmetric_key = payload
+        .user_symmetric_key
+        .or_else(|| unlock.map(|value| value.master_key_wrapped_user_key.clone()))
+        .ok_or_else(|| AppError::BadRequest("Missing user key".to_string()))?;
+    let user_asymmetric_keys = payload
+        .user_asymmetric_keys
+        .ok_or_else(|| AppError::BadRequest("Missing userAsymmetricKeys".to_string()))?;
+    let kdf = payload
+        .kdf
+        .or_else(|| auth.and_then(|value| value.kdf.as_ref()?.kdf_type))
+        .or_else(|| unlock.and_then(|value| value.kdf.as_ref()?.kdf_type))
+        .unwrap_or(0);
+    let kdf_iterations = payload
+        .kdf_iterations
+        .or_else(|| auth.and_then(|value| value.kdf.as_ref()?.iterations))
+        .or_else(|| unlock.and_then(|value| value.kdf.as_ref()?.iterations))
+        .unwrap_or(600_000);
     let user = User {
         id: Uuid::new_v4().to_string(),
         name: payload.name,
         email: payload.email.to_lowercase(),
         email_verified: true,
-        master_password_hash: payload.master_password_hash,
+        master_password_hash,
         master_password_hint: payload.master_password_hint,
-        key: payload.user_symmetric_key,
-        private_key: payload.user_asymmetric_keys.encrypted_private_key,
-        public_key: payload.user_asymmetric_keys.public_key,
-        kdf_type: payload.kdf,
-        kdf_iterations: payload.kdf_iterations,
+        key: user_symmetric_key,
+        private_key: user_asymmetric_keys.encrypted_private_key,
+        public_key: user_asymmetric_keys.public_key,
+        kdf_type: kdf,
+        kdf_iterations,
         security_stamp: Uuid::new_v4().to_string(),
         created_at: now.clone(),
         updated_at: now,
@@ -203,7 +263,9 @@ pub async fn change_master_password(
     Json(payload): Json<ChangeMasterPasswordRequest>,
 ) -> Result<Json<Value>, AppError> {
     if payload.master_password_hash.is_empty() || payload.new_master_password_hash.is_empty() {
-        return Err(AppError::BadRequest("Missing masterPasswordHash".to_string()));
+        return Err(AppError::BadRequest(
+            "Missing masterPasswordHash".to_string(),
+        ));
     }
     if payload.user_symmetric_key.is_empty() {
         return Err(AppError::BadRequest("Missing userSymmetricKey".to_string()));
@@ -271,7 +333,9 @@ pub async fn change_email(
     Json(payload): Json<ChangeEmailRequest>,
 ) -> Result<Json<Value>, AppError> {
     if payload.master_password_hash.is_empty() || payload.new_master_password_hash.is_empty() {
-        return Err(AppError::BadRequest("Missing masterPasswordHash".to_string()));
+        return Err(AppError::BadRequest(
+            "Missing masterPasswordHash".to_string(),
+        ));
     }
     if payload.new_email.trim().is_empty() {
         return Err(AppError::BadRequest("Missing newEmail".to_string()));
