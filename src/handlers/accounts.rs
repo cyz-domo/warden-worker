@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, http::StatusCode, Json};
 use chrono::Utc;
 use constant_time_eq::constant_time_eq;
 use serde::Deserialize;
@@ -44,6 +44,13 @@ pub struct ChangeEmailRequest {
     pub kdf_iterations: Option<i32>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAccountRequest {
+    #[serde(alias = "MasterPasswordHash")]
+    pub master_password_hash: String,
+}
+
 #[worker::send]
 pub async fn profile(claims: Claims, State(env): State<Arc<Env>>) -> Result<Json<Value>, AppError> {
     let db = db::get_db(&env)?;
@@ -75,6 +82,67 @@ pub async fn profile(claims: Claims, State(env): State<Arc<Env>>) -> Result<Json
 #[worker::send]
 pub async fn revision_date(_claims: Claims) -> Result<Json<i64>, AppError> {
     Ok(Json(chrono::Utc::now().timestamp_millis()))
+}
+
+async fn delete_account_impl(
+    claims: Claims,
+    env: Arc<Env>,
+    payload: DeleteAccountRequest,
+) -> Result<StatusCode, AppError> {
+    if payload.master_password_hash.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "Missing masterPasswordHash".to_string(),
+        ));
+    }
+
+    let db = db::get_db(&env)?;
+    let stored_hash: Option<String> = db
+        .prepare("SELECT master_password_hash FROM users WHERE id = ?1")
+        .bind(&[claims.sub.clone().into()])?
+        .first(Some("master_password_hash"))
+        .await
+        .map_err(|_| AppError::Database)?;
+    let Some(stored_hash) = stored_hash else {
+        return Err(AppError::NotFound("User not found".to_string()));
+    };
+    if !constant_time_eq(
+        stored_hash.as_bytes(),
+        payload.master_password_hash.trim().as_bytes(),
+    ) {
+        return Err(AppError::Unauthorized("Invalid credentials".to_string()));
+    }
+
+    let user_id = claims.sub;
+    let statements = vec![
+        db.prepare("DELETE FROM send_file_chunks WHERE send_file_id IN (SELECT id FROM send_files WHERE user_id = ?1)").bind(&[user_id.clone().into()])?,
+        db.prepare("DELETE FROM send_files WHERE user_id = ?1").bind(&[user_id.clone().into()])?,
+        db.prepare("DELETE FROM sends WHERE user_id = ?1").bind(&[user_id.clone().into()])?,
+        db.prepare("DELETE FROM ciphers WHERE user_id = ?1").bind(&[user_id.clone().into()])?,
+        db.prepare("DELETE FROM folders WHERE user_id = ?1").bind(&[user_id.clone().into()])?,
+        db.prepare("DELETE FROM devices WHERE user_id = ?1").bind(&[user_id.clone().into()])?,
+        db.prepare("DELETE FROM two_factor_authenticator WHERE user_id = ?1").bind(&[user_id.clone().into()])?,
+        db.prepare("DELETE FROM users WHERE id = ?1").bind(&[user_id.into()])?,
+    ];
+    db.batch(statements).await.map_err(|_| AppError::Database)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[worker::send]
+pub async fn delete_account(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Json(payload): Json<DeleteAccountRequest>,
+) -> Result<StatusCode, AppError> {
+    delete_account_impl(claims, env, payload).await
+}
+
+#[worker::send]
+pub async fn delete_account_post(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Json(payload): Json<DeleteAccountRequest>,
+) -> Result<StatusCode, AppError> {
+    delete_account_impl(claims, env, payload).await
 }
 
 #[worker::send]
