@@ -232,6 +232,7 @@ wrangler secret put TWO_FACTOR_ENC_KEY --config wrangler.production.jsonc
 
 - `CLOUDFLARE_API_TOKEN` 必须是该 Cloudflare 账户的 API Token，不能使用其他账户的 Token。
 - `CLOUDFLARE_ACCOUNT_ID` 必须填写 `2a863f1907f04c91e31378c111cd4a26` 这类 32 位 Cloudflare **帐户 ID**，不是 Zone ID/区域 ID。
+- `wrangler.production.jsonc` 不固定任何账户 ID；workflow 通过 `CLOUDFLARE_ACCOUNT_ID` 环境变量指定目标账户，便于其他人复用仓库。
 - 如果把值放在 GitHub 的 `Variables` 而不是 `Secrets`，当前 workflow 不会读取到它们；请移动到 `production` Environment secrets。
 - API Token 需要目标帐户的 `Workers Scripts`、`D1` 和 Durable Objects 相关权限，并且 Token 所属账户必须与 `CLOUDFLARE_ACCOUNT_ID` 一致。
 
