@@ -14,6 +14,9 @@ on:
 permissions:
   contents: read
 
+env:
+  RUSTFLAGS: '--cfg getrandom_backend="wasm_js"'
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
