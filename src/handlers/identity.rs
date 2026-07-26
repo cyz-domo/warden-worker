@@ -1,18 +1,18 @@
-use axum::{extract::State, response::IntoResponse, Form, Json};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::Response;
+use axum::{extract::State, response::IntoResponse, Form, Json};
+use base64::{engine::general_purpose, Engine as _};
 use chrono::{Duration, Utc};
 use constant_time_eq::constant_time_eq;
-use base64::{engine::general_purpose, Engine as _};
-use rand::RngCore;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
-use serde::Deserialize;
+use rand::RngCore;
 use serde::de::{self, Deserializer};
+use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use uuid::Uuid;
 use worker::{wasm_bindgen::JsValue, Env};
-use sha2::{Digest, Sha256};
 
 use crate::{auth::Claims, db, error::AppError, models::user::User, two_factor};
 
@@ -54,13 +54,24 @@ where
 
 #[derive(Debug, Deserialize)]
 pub struct TokenRequest {
+    #[serde(alias = "grantType")]
     grant_type: String,
+    #[serde(alias = "userName")]
     username: Option<String>,
     password: Option<String>, // This is the masterPasswordHash
+    #[serde(alias = "refreshToken")]
     refresh_token: Option<String>,
+    #[serde(alias = "sendId")]
+    send_id: Option<String>,
+    #[serde(alias = "passwordHashB64")]
+    password_hash_b64: Option<String>,
     scope: Option<String>,
     client_id: Option<String>,
-    #[serde(rename = "deviceIdentifier", alias = "device_identifier", alias = "deviceId")]
+    #[serde(
+        rename = "deviceIdentifier",
+        alias = "device_identifier",
+        alias = "deviceId"
+    )]
     device_identifier: Option<String>,
     #[serde(rename = "deviceName", alias = "device_name")]
     device_name: Option<String>,
@@ -91,10 +102,7 @@ fn js_opt_i64(v: Option<i64>) -> JsValue {
     }
 }
 
-fn generate_tokens_and_response(
-    user: User,
-    env: &Arc<Env>,
-) -> Result<Value, AppError> {
+fn generate_tokens_and_response(user: User, env: &Arc<Env>) -> Result<Value, AppError> {
     let now = Utc::now();
     let expires_in = Duration::hours(2);
     let exp = (now + expires_in).timestamp() as usize;
@@ -175,6 +183,100 @@ fn generate_tokens_and_response(
         "scope": "api offline_access",
         "token_type": "Bearer"
     }))
+}
+
+async fn generate_send_access_response(
+    env: &Arc<Env>,
+    db: &worker::D1Database,
+    payload: &TokenRequest,
+) -> Result<Response, AppError> {
+    let access_id = payload
+        .send_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| AppError::BadRequest("Missing send_id".to_string()))?;
+    let send_id = crate::models::send::uuid_from_access_id(access_id)
+        .ok_or_else(|| AppError::BadRequest("Invalid send_id".to_string()))?;
+    let send: Value = db
+        .prepare("SELECT * FROM sends WHERE id = ?1")
+        .bind(&[send_id.clone().into()])?
+        .first(None)
+        .await
+        .map_err(|_| AppError::Database)?
+        .ok_or_else(|| AppError::NotFound("Send not found".to_string()))?;
+    let send: crate::models::send::SendDBModel =
+        serde_json::from_value(send).map_err(|_| AppError::Internal)?;
+
+    if send.disabled {
+        return Err(AppError::NotFound("Send not found".to_string()));
+    }
+    if let Some(max) = send.max_access_count {
+        if send.access_count >= max {
+            return Err(AppError::NotFound("Send not found".to_string()));
+        }
+    }
+    if let Some(expiration) = send.expiration_date.as_deref() {
+        if chrono::DateTime::parse_from_rfc3339(expiration)
+            .map_err(|_| AppError::Internal)?
+            .with_timezone(&Utc)
+            <= Utc::now()
+        {
+            return Err(AppError::NotFound("Send not found".to_string()));
+        }
+    }
+    if chrono::DateTime::parse_from_rfc3339(&send.deletion_date)
+        .map_err(|_| AppError::Internal)?
+        .with_timezone(&Utc)
+        <= Utc::now()
+    {
+        return Err(AppError::NotFound("Send not found".to_string()));
+    }
+
+    if let (Some(stored_hash), Some(salt), Some(password)) = (
+        send.password_hash.as_deref(),
+        send.password_salt.as_deref(),
+        payload.password_hash_b64.as_deref(),
+    ) {
+        let salt = general_purpose::STANDARD
+            .decode(salt)
+            .map_err(|_| AppError::Internal)?;
+        let mut hasher = Sha256::new();
+        hasher.update(&salt);
+        hasher.update(password.as_bytes());
+        let candidate = general_purpose::STANDARD.encode(hasher.finalize());
+        if !constant_time_eq(stored_hash.as_bytes(), candidate.as_bytes()) {
+            return Err(AppError::Unauthorized("Invalid send password".to_string()));
+        }
+    } else if send.password_hash.is_some() {
+        return Err(AppError::Unauthorized("Send password required".to_string()));
+    }
+
+    let exp = (Utc::now() + Duration::minutes(5)).timestamp() as usize;
+    let claims = json!({
+        "sub": send.id,
+        "exp": exp,
+        "scope": "api.send.access",
+        "iss": "warden-worker-send-access"
+    });
+    let secret = env.secret("JWT_SECRET")?.to_string();
+    let access_token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )?;
+    db.prepare("UPDATE sends SET access_count = access_count + 1, updated_at = ?1 WHERE id = ?2")
+        .bind(&[Utc::now().to_rfc3339().into(), send.id.into()])?
+        .run()
+        .await
+        .map_err(|_| AppError::Database)?;
+
+    Ok(Json(json!({
+        "access_token": access_token,
+        "expires_in": 300,
+        "token_type": "Bearer",
+        "scope": "api.send.access"
+    }))
+    .into_response())
 }
 
 async fn ensure_devices_table(db: &worker::D1Database) -> Result<(), AppError> {
@@ -280,7 +382,7 @@ pub async fn token(
     Form(payload): Form<TokenRequest>,
 ) -> Result<Response, AppError> {
     let db = db::get_db(&env)?;
-    match payload.grant_type.as_str() {
+    match payload.grant_type.trim() {
         "password" => {
             let username = payload
                 .username
@@ -419,9 +521,7 @@ pub async fn token(
                 ensure_devices_table(&db).await?;
 
                 let now = Utc::now().to_rfc3339();
-                let remember_hash = remember_token_to_return
-                    .as_deref()
-                    .map(sha256_hex);
+                let remember_hash = remember_token_to_return.as_deref().map(sha256_hex);
 
                 db.prepare(
                     "INSERT INTO devices (id, user_id, device_identifier, device_name, device_type, remember_token_hash, created_at, updated_at)
@@ -499,6 +599,8 @@ pub async fn token(
             let refresh_token = payload
                 .refresh_token
                 .or_else(|| get_cookie(&headers, "bw_refresh_token"))
+                .map(|token| token.trim().to_string())
+                .filter(|token| !token.is_empty())
                 .ok_or_else(|| AppError::BadRequest("Missing refresh_token".to_string()))?;
 
             let jwt_refresh_secret = env.secret("JWT_REFRESH_SECRET")?.to_string();
@@ -539,6 +641,7 @@ pub async fn token(
             }
             Ok(resp)
         }
+        "send_access" => generate_send_access_response(&env, &db, &payload).await,
         _ => Err(AppError::BadRequest("Unsupported grant_type".to_string())),
     }
 }

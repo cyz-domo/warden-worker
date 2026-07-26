@@ -1,6 +1,6 @@
 use axum::{
     extract::{Multipart, Path, Query, State},
-    http::StatusCode,
+    http::{header, request::Parts, StatusCode},
     response::Response,
     Json,
 };
@@ -27,13 +27,51 @@ use crate::{
 
 const SEND_FILE_B64_CHUNK_LEN: usize = 1_500_000;
 
+#[derive(Debug, Deserialize)]
+pub struct SendAccessClaims {
+    sub: String,
+    exp: usize,
+    scope: String,
+    iss: String,
+}
+
+impl axum::extract::FromRequestParts<Arc<Env>> for SendAccessClaims {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        env: &Arc<Env>,
+    ) -> Result<Self, Self::Rejection> {
+        let token = parts
+            .headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| AppError::Unauthorized("Invalid send access token".to_string()))?;
+        let secret = env.secret("JWT_SECRET")?.to_string();
+        let claims = jsonwebtoken::decode::<SendAccessClaims>(
+            token.trim(),
+            &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
+            &jsonwebtoken::Validation::default(),
+        )?
+        .claims;
+        if claims.iss != "warden-worker-send-access" || claims.scope != "api.send.access" {
+            return Err(AppError::Unauthorized(
+                "Invalid send access token".to_string(),
+            ));
+        }
+        Ok(claims)
+    }
+}
+
 fn now_rfc3339_millis() -> String {
-    Utc::now()
-        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 fn parse_rfc3339(s: &str) -> Result<DateTime<Utc>, AppError> {
-    let dt = DateTime::parse_from_rfc3339(s).map_err(|_| AppError::BadRequest("Invalid date".to_string()))?;
+    let dt = DateTime::parse_from_rfc3339(s)
+        .map_err(|_| AppError::BadRequest("Invalid date".to_string()))?;
     Ok(dt.with_timezone(&Utc))
 }
 
@@ -73,8 +111,14 @@ fn new_salt_b64() -> String {
 fn extract_send_payload_data(mut data: SendData) -> Result<(i32, String, Value), AppError> {
     let send_type = data.r#type;
     let mut payload = match send_type {
-        SEND_TYPE_TEXT => data.text.take().ok_or_else(|| AppError::BadRequest("Missing text".to_string()))?,
-        SEND_TYPE_FILE => data.file.take().ok_or_else(|| AppError::BadRequest("Missing file".to_string()))?,
+        SEND_TYPE_TEXT => data
+            .text
+            .take()
+            .ok_or_else(|| AppError::BadRequest("Missing text".to_string()))?,
+        SEND_TYPE_FILE => data
+            .file
+            .take()
+            .ok_or_else(|| AppError::BadRequest("Missing file".to_string()))?,
         _ => return Err(AppError::BadRequest("Invalid send type".to_string())),
     };
 
@@ -85,7 +129,10 @@ fn extract_send_payload_data(mut data: SendData) -> Result<(i32, String, Value),
     Ok((send_type, data.key, payload))
 }
 
-async fn get_send_by_id(db: &worker::D1Database, send_id: &str) -> Result<Option<SendDBModel>, AppError> {
+async fn get_send_by_id(
+    db: &worker::D1Database,
+    send_id: &str,
+) -> Result<Option<SendDBModel>, AppError> {
     let value: Option<Value> = db
         .prepare("SELECT * FROM sends WHERE id = ?1")
         .bind(&[send_id.into()])?
@@ -109,13 +156,13 @@ async fn get_send_by_id_and_user(
     Ok(value.and_then(|v| serde_json::from_value::<SendDBModel>(v).ok()))
 }
 
-async fn update_send_access_count(db: &worker::D1Database, send_id: &str, delta: i32) -> Result<(), AppError> {
+async fn update_send_access_count(
+    db: &worker::D1Database,
+    send_id: &str,
+    delta: i32,
+) -> Result<(), AppError> {
     db.prepare("UPDATE sends SET access_count = access_count + ?1, updated_at = ?2 WHERE id = ?3")
-        .bind(&[
-            delta.into(),
-            now_rfc3339_millis().into(),
-            send_id.into(),
-        ])?
+        .bind(&[delta.into(), now_rfc3339_millis().into(), send_id.into()])?
         .run()
         .await
         .map_err(|_| AppError::Database)?;
@@ -279,7 +326,9 @@ pub async fn post_send(
     let db = db::get_db(&env)?;
 
     if payload.r#type == SEND_TYPE_FILE {
-        return Err(AppError::BadRequest("File sends should use /api/sends/file/v2".to_string()));
+        return Err(AppError::BadRequest(
+            "File sends should use /api/sends/file/v2".to_string(),
+        ));
     }
 
     let payload = payload;
@@ -347,7 +396,9 @@ pub async fn post_send_file_v2(
     let db = db::get_db(&env)?;
 
     if payload.r#type != SEND_TYPE_FILE {
-        return Err(AppError::BadRequest("Send content is not a file".to_string()));
+        return Err(AppError::BadRequest(
+            "Send content is not a file".to_string(),
+        ));
     }
 
     let payload = payload;
@@ -355,7 +406,9 @@ pub async fn post_send_file_v2(
         .file_length
         .ok_or_else(|| AppError::BadRequest("Invalid send length".to_string()))?;
     if file_length < 0 {
-        return Err(AppError::BadRequest("Send size can't be negative".to_string()));
+        return Err(AppError::BadRequest(
+            "Send size can't be negative".to_string(),
+        ));
     }
 
     let name = payload.name.clone();
@@ -372,7 +425,10 @@ pub async fn post_send_file_v2(
     if let Some(obj) = data_value.as_object_mut() {
         obj.insert("id".to_string(), Value::String(file_id.clone()));
         obj.insert("size".to_string(), Value::Number(file_length.into()));
-        obj.insert("sizeName".to_string(), Value::String(display_size(file_length)));
+        obj.insert(
+            "sizeName".to_string(),
+            Value::String(display_size(file_length)),
+        );
     }
 
     let send_id = Uuid::new_v4().to_string();
@@ -444,20 +500,34 @@ pub async fn post_send_file_v2_data(
     let db = db::get_db(&env)?;
     let send = get_send_by_id_and_user(&db, &send_id, &claims.sub)
         .await?
-        .ok_or_else(|| AppError::NotFound("Send not found. Unable to save the file.".to_string()))?;
+        .ok_or_else(|| {
+            AppError::NotFound("Send not found. Unable to save the file.".to_string())
+        })?;
     if send.r#type != SEND_TYPE_FILE {
-        return Err(AppError::BadRequest("Send content is not a file".to_string()));
+        return Err(AppError::BadRequest(
+            "Send content is not a file".to_string(),
+        ));
     }
 
     let size: Option<i64> = db
-        .prepare("SELECT size FROM send_files WHERE id = ?1 AND send_id = ?2 AND user_id = ?3 LIMIT 1")
-        .bind(&[file_id.clone().into(), send_id.clone().into(), claims.sub.clone().into()])?
+        .prepare(
+            "SELECT size FROM send_files WHERE id = ?1 AND send_id = ?2 AND user_id = ?3 LIMIT 1",
+        )
+        .bind(&[
+            file_id.clone().into(),
+            send_id.clone().into(),
+            claims.sub.clone().into(),
+        ])?
         .first(Some("size"))
         .await
         .map_err(|_| AppError::Database)?;
-    let size = size.ok_or_else(|| AppError::NotFound("Send not found. Unable to save the file.".to_string()))?;
+    let size = size.ok_or_else(|| {
+        AppError::NotFound("Send not found. Unable to save the file.".to_string())
+    })?;
     if size < 0 {
-        return Err(AppError::BadRequest("Send size can't be negative".to_string()));
+        return Err(AppError::BadRequest(
+            "Send size can't be negative".to_string(),
+        ));
     }
 
     let now = now_rfc3339_millis();
@@ -630,7 +700,8 @@ pub async fn post_access(
     Json(payload): Json<SendAccessData>,
 ) -> Result<Json<Value>, AppError> {
     let db = db::get_db(&env)?;
-    let send_id = uuid_from_access_id(&access_id).ok_or_else(|| AppError::NotFound("Send not found".to_string()))?;
+    let send_id = uuid_from_access_id(&access_id)
+        .ok_or_else(|| AppError::NotFound("Send not found".to_string()))?;
     let send = get_send_by_id(&db, &send_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Send not found".to_string()))?;
@@ -642,6 +713,20 @@ pub async fn post_access(
         update_send_access_count(&db, &send.id, 1).await?;
     }
 
+    let creator_identifier = get_creator_identifier(&db, &send).await?;
+    Ok(Json(send_to_json_access(&send, creator_identifier)))
+}
+
+#[worker::send]
+pub async fn post_access_with_token(
+    claims: SendAccessClaims,
+    State(env): State<Arc<Env>>,
+) -> Result<Json<Value>, AppError> {
+    let db = db::get_db(&env)?;
+    let send = get_send_by_id(&db, &claims.sub)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Send not found".to_string()))?;
+    validate_send_access(&send)?;
     let creator_identifier = get_creator_identifier(&db, &send).await?;
     Ok(Json(send_to_json_access(&send, creator_identifier)))
 }
@@ -693,7 +778,11 @@ struct SendDownloadClaims {
     exp: usize,
 }
 
-fn generate_download_token(env: &Arc<Env>, send_id: &str, file_id: &str) -> Result<String, AppError> {
+fn generate_download_token(
+    env: &Arc<Env>,
+    send_id: &str,
+    file_id: &str,
+) -> Result<String, AppError> {
     let secret = env.secret("JWT_SECRET")?.to_string();
     let exp = (Utc::now() + chrono::Duration::minutes(5)).timestamp() as usize;
     let claims = SendDownloadClaims {
@@ -708,7 +797,12 @@ fn generate_download_token(env: &Arc<Env>, send_id: &str, file_id: &str) -> Resu
     Ok(token)
 }
 
-fn validate_download_token(env: &Arc<Env>, token: &str, send_id: &str, file_id: &str) -> Result<(), AppError> {
+fn validate_download_token(
+    env: &Arc<Env>,
+    token: &str,
+    send_id: &str,
+    file_id: &str,
+) -> Result<(), AppError> {
     let secret = env.secret("JWT_SECRET")?.to_string();
     let data = jsonwebtoken::decode::<SendDownloadClaims>(
         token,
@@ -768,7 +862,9 @@ pub async fn download_send(
             out
         }
     };
-    let bytes = general_purpose::STANDARD.decode(data_b64).map_err(|_| AppError::Internal)?;
+    let bytes = general_purpose::STANDARD
+        .decode(data_b64)
+        .map_err(|_| AppError::Internal)?;
 
     let mut response = Response::new(axum::body::Body::from(bytes));
     *response.status_mut() = StatusCode::OK;

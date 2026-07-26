@@ -11,10 +11,18 @@
     }
   ],
   "build": { "command": "worker-build --release" },
+  "durable_objects": {
+    "bindings": [
+      { "name": "HEAVY_DO", "class_name": "HeavyDo" }
+    ]
+  },
+  "migrations": [
+    { "tag": "heavy_do_v1", "new_sqlite_classes": ["HeavyDo"] }
+  ],
   "observability": { "logs": { "enabled": true, "persist": true } },
   "assets": {
     "directory": "./static/web-vault",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/identity/*", "/sends/*", "/demo.html"]
+    "run_worker_first": ["/api/*", "/identity/*", "/sends/*", "/demo.html", "/admin.html"]
   }
 }
