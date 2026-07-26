@@ -91,6 +91,7 @@ async fn create_cipher_inner(
         favorite: cipher_data_req.favorite,
         folder_id: cipher_data_req.folder_id.clone(),
         deleted_at: None,
+        archived_at: None,
         created_at: now.clone(),
         updated_at: now.clone(),
         object: "cipher".to_string(),
@@ -191,6 +192,7 @@ pub async fn update_cipher(
         favorite: cipher_data_req.favorite,
         folder_id: cipher_data_req.folder_id.clone(),
         deleted_at: existing_cipher.deleted_at,
+        archived_at: existing_cipher.archived_at,
         created_at: existing_cipher.created_at,
         updated_at: now.clone(),
         object: "cipher".to_string(),
@@ -277,6 +279,101 @@ pub async fn restore_cipher(
     cipher.deleted_at = None;
     cipher.updated_at = now;
     Ok(Json(cipher))
+}
+
+#[worker::send]
+pub async fn archive_cipher(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Path(id): Path<String>,
+) -> Result<Json<Cipher>, AppError> {
+    let db = db::get_db(&env)?;
+    let existing = get_cipher_dbmodel(&env, &id, &claims.sub).await?;
+    let now = Utc::now().to_rfc3339();
+    query!(
+        &db,
+        "UPDATE ciphers SET archived_at = ?1, updated_at = ?2 WHERE id = ?3 AND user_id = ?4",
+        now,
+        now,
+        id,
+        claims.sub
+    )
+    .map_err(|_| AppError::Database)?
+    .run()
+    .await?;
+    let mut cipher: Cipher = existing.into();
+    cipher.archived_at = Some(now.clone());
+    cipher.updated_at = now;
+    Ok(Json(cipher))
+}
+
+#[worker::send]
+pub async fn unarchive_cipher(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Path(id): Path<String>,
+) -> Result<Json<Cipher>, AppError> {
+    let db = db::get_db(&env)?;
+    let existing = get_cipher_dbmodel(&env, &id, &claims.sub).await?;
+    let now = Utc::now().to_rfc3339();
+    query!(
+        &db,
+        "UPDATE ciphers SET archived_at = NULL, updated_at = ?1 WHERE id = ?2 AND user_id = ?3",
+        now,
+        id,
+        claims.sub
+    )
+    .map_err(|_| AppError::Database)?
+    .run()
+    .await?;
+    let mut cipher: Cipher = existing.into();
+    cipher.archived_at = None;
+    cipher.updated_at = now;
+    Ok(Json(cipher))
+}
+
+#[worker::send]
+pub async fn archive_ciphers(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Json(payload): Json<CipherIdsRequest>,
+) -> Result<Json<()>, AppError> {
+    update_archived_ciphers(claims, env, payload.ids, true).await
+}
+
+#[worker::send]
+pub async fn unarchive_ciphers(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Json(payload): Json<CipherIdsRequest>,
+) -> Result<Json<()>, AppError> {
+    update_archived_ciphers(claims, env, payload.ids, false).await
+}
+
+async fn update_archived_ciphers(
+    claims: Claims,
+    env: Arc<Env>,
+    ids: Vec<String>,
+    archived: bool,
+) -> Result<Json<()>, AppError> {
+    let db = db::get_db(&env)?;
+    let now = Utc::now().to_rfc3339();
+    let archived_at = if archived { Some(now.clone()) } else { None };
+    for id in ids {
+        db.prepare(
+            "UPDATE ciphers SET archived_at = ?1, updated_at = ?2 WHERE id = ?3 AND user_id = ?4",
+        )
+        .bind(&[
+            archived_at.clone().into(),
+            now.clone().into(),
+            id.into(),
+            claims.sub.clone().into(),
+        ])?
+        .run()
+        .await
+        .map_err(|_| AppError::Database)?;
+    }
+    Ok(Json(()))
 }
 
 #[worker::send]

@@ -1,4 +1,8 @@
-use axum::{extract::State, Json};
+use axum::{
+    extract::State,
+    http::header,
+    response::{IntoResponse, Response},
+};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use worker::Env;
@@ -8,20 +12,27 @@ use crate::{
     db,
     error::AppError,
     models::{
-        cipher::{Cipher, CipherDBModel},
         folder::{Folder, FolderResponse},
         send::{send_to_json, SendDBModel},
-        sync::{Profile, SyncResponse},
+        sync::Profile,
         user::User,
     },
     two_factor,
 };
 
+pub struct RawJson(pub String);
+
+impl IntoResponse for RawJson {
+    fn into_response(self) -> Response {
+        ([(header::CONTENT_TYPE, "application/json")], self.0).into_response()
+    }
+}
+
 #[worker::send]
 pub async fn get_sync_data(
     claims: Claims,
     State(env): State<Arc<Env>>,
-) -> Result<Json<SyncResponse>, AppError> {
+) -> Result<RawJson, AppError> {
     let user_id = claims.sub;
     let db = db::get_db(&env)?;
 
@@ -44,26 +55,39 @@ pub async fn get_sync_data(
     let folders: Vec<FolderResponse> = folders_db.into_iter().map(|f| f.into()).collect();
 
     // Fetch ciphers
-    let ciphers: Vec<Value> = db
-        .prepare("SELECT * FROM ciphers WHERE user_id = ?1")
-        .bind(&[user_id.clone().into()])?
-        .all()
-        .await?
-        .results()?;
-
-    let ciphers = ciphers
-        .into_iter()
-        .filter_map(
-            |cipher| match serde_json::from_value::<CipherDBModel>(cipher.clone()) {
-                Ok(cipher) => Some(cipher),
-                Err(err) => {
-                    log::warn!("Cannot parse {err:?} {cipher:?}");
-                    None
-                }
-            },
+    let cipher_json: String = db
+        .prepare(
+            "SELECT COALESCE(json_group_array(json(sub.cipher_json)), '[]') AS ciphers_json
+             FROM (
+               SELECT json_object(
+                 'object', 'cipher', 'id', c.id, 'userId', c.user_id,
+                 'organizationId', c.organization_id, 'folderId', c.folder_id,
+                 'type', c.type, 'favorite', json(CASE WHEN c.favorite THEN 'true' ELSE 'false' END),
+                 'edit', json('true'), 'viewPassword', json('true'),
+                 'permissions', json_object('delete', json('true'), 'restore', json('true')),
+                 'organizationUseTotp', json('false'), 'collectionIds', json('[]'),
+                 'revisionDate', c.updated_at, 'creationDate', c.created_at,
+                 'deletedDate', c.deleted_at, 'archivedDate', c.archived_at,
+                 'name', json_extract(c.data, '$.name'),
+                 'notes', json_extract(c.data, '$.notes'),
+                 'fields', COALESCE(json_extract(c.data, '$.fields'), json('[]')),
+                 'passwordHistory', COALESCE(json_extract(c.data, '$.passwordHistory'), json('[]')),
+                 'reprompt', COALESCE(json_extract(c.data, '$.reprompt'), 0),
+                 'login', CASE WHEN c.type = 1 THEN json_extract(c.data, '$.login') ELSE NULL END,
+                 'secureNote', CASE WHEN c.type = 2 THEN json_extract(c.data, '$.secureNote') ELSE NULL END,
+                 'card', CASE WHEN c.type = 3 THEN json_extract(c.data, '$.card') ELSE NULL END,
+                 'identity', CASE WHEN c.type = 4 THEN json_extract(c.data, '$.identity') ELSE NULL END,
+                 'sshKey', CASE WHEN c.type = 5 THEN json_extract(c.data, '$.sshKey') ELSE NULL END,
+                 'key', json_extract(c.data, '$.key')
+               ) AS cipher_json
+               FROM ciphers c WHERE c.user_id = ?1 ORDER BY c.updated_at DESC
+             ) sub",
         )
-        .map(|cipher| cipher.into())
-        .collect::<Vec<Cipher>>();
+        .bind(&[user_id.clone().into()])?
+        .first(Some("ciphers_json"))
+        .await
+        .map_err(|_| AppError::Database)?
+        .unwrap_or_else(|| "[]".to_string());
 
     let send_rows: Vec<Value> = db
         .prepare("SELECT * FROM sends WHERE user_id = ?1 ORDER BY updated_at DESC")
@@ -73,7 +97,14 @@ pub async fn get_sync_data(
         .results()?;
     let sends = send_rows
         .into_iter()
-        .filter_map(|v| serde_json::from_value::<SendDBModel>(v).ok())
+        .filter_map(|v| match serde_json::from_value::<SendDBModel>(v.clone()) {
+            Ok(send) => Some(send),
+            Err(error) => {
+                let send_id = v.get("id").and_then(Value::as_str).unwrap_or("unknown");
+                log::warn!("Cannot parse send {send_id}: {error}");
+                None
+            }
+        })
         .map(|s| send_to_json(&s))
         .collect::<Vec<_>>();
 
@@ -113,17 +144,12 @@ pub async fn get_sync_data(
         private_key: user.private_key,
     };
 
-    let response = SyncResponse {
-        profile,
-        folders,
-        collections: Vec::new(),
-        policies: Vec::new(),
-        ciphers,
-        sends,
-        domains: serde_json::Value::Null, // Ignored for basic implementation
-        user_decryption,
-        object: "sync".to_string(),
-    };
-
-    Ok(Json(response))
+    let profile = serde_json::to_string(&profile).map_err(|_| AppError::Internal)?;
+    let folders = serde_json::to_string(&folders).map_err(|_| AppError::Internal)?;
+    let sends = serde_json::to_string(&sends).map_err(|_| AppError::Internal)?;
+    let user_decryption =
+        serde_json::to_string(&user_decryption).map_err(|_| AppError::Internal)?;
+    Ok(RawJson(format!(
+        "{{\"profile\":{profile},\"folders\":{folders},\"collections\":[],\"policies\":[],\"ciphers\":{cipher_json},\"sends\":{sends},\"domains\":null,\"userDecryption\":{user_decryption},\"object\":\"sync\"}}"
+    )))
 }

@@ -102,7 +102,11 @@ fn js_opt_i64(v: Option<i64>) -> JsValue {
     }
 }
 
-fn generate_tokens_and_response(user: User, env: &Arc<Env>) -> Result<Value, AppError> {
+fn generate_tokens_and_response(
+    user: User,
+    env: &Arc<Env>,
+    device_identifier: Option<&str>,
+) -> Result<Value, AppError> {
     let now = Utc::now();
     let expires_in = Duration::hours(2);
     let exp = (now + expires_in).timestamp() as usize;
@@ -111,6 +115,8 @@ fn generate_tokens_and_response(user: User, env: &Arc<Env>) -> Result<Value, App
         sub: user.id.clone(),
         exp,
         nbf: now.timestamp() as usize,
+        sstamp: user.security_stamp.clone(),
+        device: device_identifier.map(str::to_string),
         premium: true,
         name: user.name.clone().unwrap_or_else(|| "User".to_string()),
         email: user.email.clone(),
@@ -131,6 +137,8 @@ fn generate_tokens_and_response(user: User, env: &Arc<Env>) -> Result<Value, App
         sub: user.id.clone(),
         exp: refresh_exp,
         nbf: now.timestamp() as usize,
+        sstamp: user.security_stamp.clone(),
+        device: device_identifier.map(str::to_string),
         premium: true,
         name: user.name.unwrap_or_else(|| "User".to_string()),
         email: user.email.clone(),
@@ -546,7 +554,8 @@ pub async fn token(
                 payload.two_factor_remember
             );
 
-            let mut response = generate_tokens_and_response(user, &env)?;
+            let mut response =
+                generate_tokens_and_response(user, &env, payload.device_identifier.as_deref())?;
             let remember_token_to_set = remember_token_to_return.clone();
 
             if let Some(device_identifier) = device_identifier.as_deref() {
@@ -643,7 +652,8 @@ pub async fn token(
             )
             .map_err(|_| AppError::Unauthorized("Invalid refresh token".to_string()))?;
 
-            let user_id = token_data.claims.sub;
+            let refresh_claims = token_data.claims;
+            let user_id = refresh_claims.sub.clone();
             let user: Value = db
                 .prepare("SELECT * FROM users WHERE id = ?1")
                 .bind(&[user_id.into()])?
@@ -653,7 +663,26 @@ pub async fn token(
                 .ok_or_else(|| AppError::Unauthorized("Invalid user".to_string()))?;
             let user: User = serde_json::from_value(user).map_err(|_| AppError::Internal)?;
 
-            let response = generate_tokens_and_response(user, &env)?;
+            if !constant_time_eq(
+                refresh_claims.sstamp.as_bytes(),
+                user.security_stamp.as_bytes(),
+            ) {
+                return Err(AppError::Unauthorized("Invalid refresh token".to_string()));
+            }
+            if let Some(device) = refresh_claims.device.as_deref() {
+                let exists: Option<i64> = db
+                    .prepare("SELECT 1 AS ok FROM devices WHERE user_id = ?1 AND device_identifier = ?2 LIMIT 1")
+                    .bind(&[user.id.clone().into(), device.into()])?
+                    .first(Some("ok"))
+                    .await
+                    .map_err(|_| AppError::Unauthorized("Invalid refresh token".to_string()))?;
+                if exists.is_none() {
+                    return Err(AppError::Unauthorized("Invalid refresh token".to_string()));
+                }
+            }
+
+            let response =
+                generate_tokens_and_response(user, &env, refresh_claims.device.as_deref())?;
             let mut resp = Json(response.clone()).into_response();
             if let Some(v) = response.get("access_token").and_then(|v| v.as_str()) {
                 set_cookie(

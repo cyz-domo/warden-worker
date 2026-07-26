@@ -14,6 +14,9 @@ pub struct Claims {
     pub sub: String, // User ID
     pub exp: usize,  // Expiration time
     pub nbf: usize,  // Not before time
+    pub sstamp: String,
+    #[serde(default)]
+    pub device: Option<String>,
 
     pub premium: bool,
     pub name: String,
@@ -25,6 +28,7 @@ pub struct Claims {
 impl FromRequestParts<Arc<Env>> for Claims {
     type Rejection = AppError;
 
+    #[worker::send]
     async fn from_request_parts(
         parts: &mut Parts,
         state: &Arc<Env>,
@@ -61,6 +65,36 @@ impl FromRequestParts<Arc<Env>> for Claims {
         let token_data = decode::<Claims>(&token, &decoding_key, &Validation::default())
             .map_err(|_| AppError::Unauthorized("Invalid token".to_string()))?;
 
-        Ok(token_data.claims)
+        let claims = token_data.claims;
+        let db = crate::db::get_db(state)?;
+        let row: Option<serde_json::Value> = db
+            .prepare("SELECT security_stamp FROM users WHERE id = ?1")
+            .bind(&[claims.sub.clone().into()])?
+            .first(None)
+            .await
+            .map_err(|_| AppError::Unauthorized("Invalid token".to_string()))?;
+        let Some(row) = row else {
+            return Err(AppError::Unauthorized("Invalid token".to_string()));
+        };
+        let current = row
+            .get("security_stamp")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        if !constant_time_eq::constant_time_eq(claims.sstamp.as_bytes(), current.as_bytes()) {
+            return Err(AppError::Unauthorized("Invalid token".to_string()));
+        }
+        if let Some(device) = claims.device.as_deref() {
+            let exists: Option<i64> = db
+                .prepare("SELECT 1 AS ok FROM devices WHERE user_id = ?1 AND device_identifier = ?2 LIMIT 1")
+                .bind(&[claims.sub.clone().into(), device.into()])?
+                .first(Some("ok"))
+                .await
+                .map_err(|_| AppError::Unauthorized("Invalid token".to_string()))?;
+            if exists.is_none() {
+                return Err(AppError::Unauthorized("Invalid token".to_string()));
+            }
+        }
+
+        Ok(claims)
     }
 }

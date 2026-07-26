@@ -85,6 +85,7 @@ pub struct Cipher {
     pub folder_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted_at: Option<String>,
+    pub archived_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 
@@ -110,12 +111,50 @@ pub struct CipherDBModel {
     pub user_id: String,
     pub organization_id: Option<String>,
     pub r#type: i32,
+    #[serde(deserialize_with = "deserialize_json_text")]
     pub data: String,
+    #[serde(deserialize_with = "deserialize_i32_from_bool_or_number")]
     pub favorite: i32,
     pub folder_id: Option<String>,
     pub deleted_at: Option<String>,
+    pub archived_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+fn deserialize_json_text<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::String(text) => Ok(text),
+        other if other.is_object() || other.is_array() => serde_json::to_string(&other)
+            .map_err(|error| de::Error::custom(format!("invalid cipher data: {error}"))),
+        _other => Err(de::Error::custom(
+            "cipher data must be a JSON string or object",
+        )),
+    }
+}
+
+fn deserialize_i32_from_bool_or_number<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Bool(value) => Ok(i32::from(value)),
+        Value::Number(value) => value
+            .as_i64()
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| de::Error::custom("cipher favorite must be an integer")),
+        Value::String(value) => value
+            .parse::<i32>()
+            .map_err(|_| de::Error::custom("cipher favorite must be an integer")),
+        _ => Err(de::Error::custom(
+            "cipher favorite must be a boolean or integer",
+        )),
+    }
 }
 
 impl Into<Cipher> for CipherDBModel {
@@ -132,9 +171,10 @@ impl Into<Cipher> for CipherDBModel {
             },
             folder_id: self.folder_id,
             deleted_at: self.deleted_at,
+            archived_at: self.archived_at,
             created_at: self.created_at,
             updated_at: self.updated_at,
-            object: "default_object".to_string(),
+            object: default_object(),
             organization_use_totp: false,
             edit: true,
             view_password: true,
@@ -173,6 +213,7 @@ impl Serialize for Cipher {
         response_map.insert("revisionDate".to_string(), json!(self.updated_at));
         response_map.insert("creationDate".to_string(), json!(self.created_at));
         response_map.insert("deletedDate".to_string(), json!(self.deleted_at));
+        response_map.insert("archivedDate".to_string(), json!(self.archived_at));
 
         if let Some(data_obj) = self.data.as_object() {
             let data_clone = data_obj.clone();
@@ -247,7 +288,7 @@ fn default_true() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::Cipher;
+    use super::{Cipher, CipherDBModel};
     use serde_json::{json, Value};
 
     #[test]
@@ -265,6 +306,7 @@ mod tests {
             favorite: false,
             folder_id: None,
             deleted_at: None,
+            archived_at: None,
             created_at: "2026-01-01T00:00:00.000Z".to_string(),
             updated_at: "2026-01-01T00:00:00.000Z".to_string(),
             object: "cipher".to_string(),
@@ -291,6 +333,48 @@ mod tests {
             Some(&Value::Bool(true)),
             "permissions.restore must exist and be true when edit=true"
         );
+    }
+
+    #[test]
+    fn cipher_db_model_accepts_object_data_and_boolean_favorite() {
+        let row = json!({
+            "id": "cipher-id",
+            "user_id": "user-id",
+            "organization_id": null,
+            "type": 1,
+            "data": {"name": "Example", "login": {"username": "u"}},
+            "favorite": true,
+            "folder_id": null,
+            "deleted_at": null,
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-01T00:00:00.000Z"
+        });
+
+        let model: CipherDBModel = serde_json::from_value(row).expect("cipher row");
+        let cipher: Cipher = model.into();
+        assert_eq!(cipher.data["name"], "Example");
+        assert!(cipher.favorite);
+    }
+
+    #[test]
+    fn cipher_db_model_accepts_json_text_and_integer_favorite() {
+        let row = json!({
+            "id": "cipher-id",
+            "user_id": "user-id",
+            "organization_id": null,
+            "type": 1,
+            "data": "{\"name\":\"Example\",\"login\":null}",
+            "favorite": 0,
+            "folder_id": null,
+            "deleted_at": null,
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "updated_at": "2026-01-01T00:00:00.000Z"
+        });
+
+        let model: CipherDBModel = serde_json::from_value(row).expect("cipher row");
+        let cipher: Cipher = model.into();
+        assert_eq!(cipher.data["name"], "Example");
+        assert!(!cipher.favorite);
     }
 }
 

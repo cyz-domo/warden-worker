@@ -180,6 +180,29 @@ pub async fn device_token(
 }
 
 #[worker::send]
+pub async fn clear_device_token(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Path(device_identifier): Path<String>,
+) -> Result<Json<()>, AppError> {
+    let db = db::get_db(&env)?;
+    ensure_devices_table(&db).await?;
+    db.prepare(
+        "UPDATE devices SET remember_token_hash = NULL, updated_at = ?1
+         WHERE user_id = ?2 AND device_identifier = ?3",
+    )
+    .bind(&[
+        Utc::now().to_rfc3339().into(),
+        claims.sub.into(),
+        device_identifier.into(),
+    ])?
+    .run()
+    .await
+    .map_err(|_| AppError::Database)?;
+    Ok(Json(()))
+}
+
+#[worker::send]
 pub async fn get_devices(
     claims: Claims,
     State(env): State<Arc<Env>>,

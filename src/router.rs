@@ -75,6 +75,10 @@ pub fn api_router(env: Env) -> Router {
             put(devices::device_token).post(devices::device_token),
         )
         .route(
+            "/api/devices/identifier/{id}/clear-token",
+            put(devices::clear_device_token).post(devices::clear_device_token),
+        )
+        .route(
             "/api/accounts/password",
             put(accounts::change_master_password),
         )
@@ -156,6 +160,13 @@ pub fn api_router(env: Env) -> Router {
             put(ciphers::soft_delete_cipher).post(ciphers::hard_delete_cipher_post),
         )
         .route("/api/ciphers/{id}/restore", put(ciphers::restore_cipher))
+        .route("/api/ciphers/{id}/archive", put(ciphers::archive_cipher))
+        .route(
+            "/api/ciphers/{id}/unarchive",
+            put(ciphers::unarchive_cipher),
+        )
+        .route("/api/ciphers/archive", put(ciphers::archive_ciphers))
+        .route("/api/ciphers/unarchive", put(ciphers::unarchive_ciphers))
         .route(
             "/api/ciphers/delete",
             put(ciphers::soft_delete_ciphers).post(ciphers::hard_delete_ciphers),
