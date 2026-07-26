@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
     public_key TEXT NOT NULL,
     kdf_type INTEGER NOT NULL DEFAULT 0,
     kdf_iterations INTEGER NOT NULL DEFAULT 600000,
+    totp_recover TEXT,
     security_stamp TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

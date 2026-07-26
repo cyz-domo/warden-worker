@@ -198,6 +198,33 @@ pub async fn get_authenticator(
 }
 
 #[worker::send]
+pub async fn get_recovery(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Json(payload): Json<PasswordOrOtpData>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = db::get_db(&env)?;
+    payload.validate(&db, &claims.sub).await?;
+    let code = match two_factor::get_recovery_code(&db, &claims.sub).await? {
+        Some(code) => code,
+        None => {
+            let code = two_factor::generate_recovery_code();
+            db.prepare("UPDATE users SET totp_recover = ?1, updated_at = ?2 WHERE id = ?3")
+                .bind(&[
+                    code.clone().into(),
+                    Utc::now().to_rfc3339().into(),
+                    claims.sub.clone().into(),
+                ])?
+                .run()
+                .await
+                .map_err(|_| AppError::Database)?;
+            code
+        }
+    };
+    Ok(Json(json!({ "code": code, "object": "twoFactorRecover" })))
+}
+
+#[worker::send]
 pub async fn activate_authenticator(
     claims: Claims,
     State(env): State<Arc<Env>>,
@@ -226,6 +253,10 @@ pub async fn activate_authenticator(
     }
 
     let now = Utc::now().to_rfc3339();
+    two_factor::ensure_recovery_code_column(&db).await?;
+    let recovery_code = two_factor::get_recovery_code(&db, &claims.sub)
+        .await?
+        .unwrap_or_else(two_factor::generate_recovery_code);
     let two_factor_key_b64 = env.secret("TWO_FACTOR_ENC_KEY").ok().map(|s| s.to_string());
     let secret_enc = two_factor::encrypt_secret_with_optional_key(
         two_factor_key_b64.as_deref(),
@@ -233,10 +264,20 @@ pub async fn activate_authenticator(
         &key,
     )?;
     two_factor::upsert_authenticator_secret(&db, &claims.sub, secret_enc, true, &now).await?;
+    db.prepare("UPDATE users SET totp_recover = ?1, updated_at = ?2 WHERE id = ?3")
+        .bind(&[
+            recovery_code.clone().into(),
+            now.clone().into(),
+            claims.sub.clone().into(),
+        ])?
+        .run()
+        .await
+        .map_err(|_| AppError::Database)?;
 
     Ok(Json(json!({
         "enabled": true,
         "key": key,
+        "recoveryCode": recovery_code,
         "userVerificationToken": null,
         "object": "twoFactorAuthenticator"
     })))
@@ -284,6 +325,7 @@ pub async fn disable_authenticator_vw(
         )?;
         if secret_encoded.eq_ignore_ascii_case(payload.key.trim()) {
             two_factor::disable_authenticator(&db, &claims.sub).await?;
+            two_factor::clear_recovery_code(&db, &claims.sub).await?;
         } else {
             return Err(AppError::BadRequest(
                 "TOTP key does not match recorded value".to_string(),
@@ -360,5 +402,6 @@ pub async fn authenticator_disable(
     }
 
     two_factor::disable_authenticator(&db, &claims.sub).await?;
+    two_factor::clear_recovery_code(&db, &claims.sub).await?;
     Ok(Json(json!({})))
 }

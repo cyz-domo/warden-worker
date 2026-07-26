@@ -496,6 +496,23 @@ pub async fn token(
                     if wants_remember && payload.device_identifier.is_some() {
                         remember_token_to_return = Some(generate_remember_token());
                     }
+                } else if provider == Some(two_factor::TWO_FACTOR_PROVIDER_RECOVERY_CODE) {
+                    let Some(token) = token.as_deref() else {
+                        return Ok(two_factor_required_response());
+                    };
+                    let recovery_code = two_factor::get_recovery_code(&db, &user.id)
+                        .await?
+                        .ok_or_else(|| {
+                            AppError::Unauthorized("Two-step token is invalid".to_string())
+                        })?;
+                    if !constant_time_eq(
+                        recovery_code.trim().to_lowercase().as_bytes(),
+                        token.trim().to_lowercase().as_bytes(),
+                    ) {
+                        return Ok(invalid_two_factor_response());
+                    }
+                    two_factor::disable_authenticator(&db, &user.id).await?;
+                    two_factor::clear_recovery_code(&db, &user.id).await?;
                 } else {
                     return Ok(two_factor_required_response());
                 }

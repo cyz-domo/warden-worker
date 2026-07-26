@@ -10,6 +10,7 @@ use worker::D1Database;
 use crate::error::AppError;
 
 pub const TWO_FACTOR_PROVIDER_AUTHENTICATOR: i32 = 0;
+pub const TWO_FACTOR_PROVIDER_RECOVERY_CODE: i32 = 8;
 
 pub fn generate_totp_secret_base32_20() -> String {
     let mut bytes = [0u8; 20];
@@ -31,6 +32,37 @@ pub async fn ensure_two_factor_authenticator_table(db: &D1Database) -> Result<()
     .run()
     .await
     .map_err(|_| AppError::Database)?;
+    Ok(())
+}
+
+pub async fn ensure_recovery_code_column(db: &D1Database) -> Result<(), AppError> {
+    let _ = db
+        .prepare("ALTER TABLE users ADD COLUMN totp_recover TEXT")
+        .run()
+        .await;
+    Ok(())
+}
+
+pub fn generate_recovery_code() -> String {
+    generate_totp_secret_base32_20().to_lowercase()
+}
+
+pub async fn get_recovery_code(db: &D1Database, user_id: &str) -> Result<Option<String>, AppError> {
+    ensure_recovery_code_column(db).await?;
+    db.prepare("SELECT totp_recover FROM users WHERE id = ?1")
+        .bind(&[user_id.into()])?
+        .first(Some("totp_recover"))
+        .await
+        .map_err(|_| AppError::Database)
+}
+
+pub async fn clear_recovery_code(db: &D1Database, user_id: &str) -> Result<(), AppError> {
+    ensure_recovery_code_column(db).await?;
+    db.prepare("UPDATE users SET totp_recover = NULL WHERE id = ?1")
+        .bind(&[user_id.into()])?
+        .run()
+        .await
+        .map_err(|_| AppError::Database)?;
     Ok(())
 }
 

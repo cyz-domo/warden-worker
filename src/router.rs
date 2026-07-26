@@ -81,6 +81,10 @@ pub fn api_router(env: Env) -> Router {
             post(two_factor::get_authenticator),
         )
         .route(
+            "/api/two-factor/get-recover",
+            post(two_factor::get_recovery),
+        )
+        .route(
             "/api/two-factor/authenticator",
             post(two_factor::activate_authenticator)
                 .put(two_factor::activate_authenticator_put)
