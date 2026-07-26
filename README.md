@@ -234,9 +234,14 @@ wrangler secret put TWO_FACTOR_ENC_KEY --config wrangler.production.jsonc
 - `CLOUDFLARE_ACCOUNT_ID` 必须填写 `2a863f1907f04c91e31378c111cd4a26` 这类 32 位 Cloudflare **帐户 ID**，不是 Zone ID/区域 ID。
 - `wrangler.production.jsonc` 不固定任何账户 ID；workflow 通过 `CLOUDFLARE_ACCOUNT_ID` 环境变量指定目标账户，便于其他人复用仓库。
 - 如果把值放在 GitHub 的 `Variables` 而不是 `Secrets`，当前 workflow 不会读取到它们；请移动到 `production` Environment secrets。
-- API Token 需要目标帐户的 `Workers Scripts`、`D1` 和 Durable Objects 相关权限，并且 Token 所属账户必须与 `CLOUDFLARE_ACCOUNT_ID` 一致。
+- API Token 必须包含以下账户级权限，并且 Token 所属账户必须与 `CLOUDFLARE_ACCOUNT_ID` 一致：
+  - `Workers Scripts: Edit`：上传、发布 Worker 和 Durable Object 类，必须有。
+  - `D1: Edit`：执行生产数据库 migration，必须有。
+  - `Account Settings: Read`：允许 Wrangler 读取账户设置，建议添加。
+- `Workers AI` 权限与本项目部署无关，不需要添加。
+- 创建 Token 时，`Account Resources` 必须选择目标 Cloudflare 账户，不能只选择其他账户或仅依赖用户级权限。
 
-API Token 需要目标账户的 Workers、D1 和 Durable Objects 相关权限。建议给 `production` Environment 设置审批人或保护规则，让 `main` 推送后先等待人工批准。
+建议给 `production` Environment 设置审批人或保护规则，让 `main` 推送后先等待人工批准。
 
 自动部署步骤为：
 
