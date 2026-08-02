@@ -1,0 +1,91 @@
+name: Check Vaultwarden upstream
+
+on:
+  schedule:
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_REPOSITORY: dani-garcia/vaultwarden
+      UPSTREAM_BRANCH: main
+      ISSUE_TITLE: "[Upstream sync] Vaultwarden compatibility review"
+    steps:
+      - name: Check upstream and notify Copilot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          upstream_json="$(gh api "repos/${UPSTREAM_REPOSITORY}/commits/${UPSTREAM_BRANCH}")"
+          upstream_sha="$(jq -r '.sha' <<<"$upstream_json")"
+          upstream_message="$(jq -r '.commit.message' <<<"$upstream_json" | head -n 1)"
+          upstream_date="$(jq -r '.commit.author.date' <<<"$upstream_json")"
+          upstream_url="https://github.com/${UPSTREAM_REPOSITORY}/commit/${upstream_sha}"
+
+          open_issues="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "${ISSUE_TITLE} in:title" --json number,title,body --limit 20)"
+          existing_number="$(jq -r --arg title "$ISSUE_TITLE" '[.[] | select(.title == $title)][0].number // empty' <<<"$open_issues")"
+          existing_body="$(jq -r --arg title "$ISSUE_TITLE" '[.[] | select(.title == $title)][0].body // empty' <<<"$open_issues")"
+
+          if grep -Fq "$upstream_sha" <<<"$existing_body"; then
+            echo "Upstream commit $upstream_sha is already tracked."
+            exit 0
+          fi
+
+          body_file="$(mktemp)"
+          trap 'rm -f "$body_file"' EXIT
+          cat >"$body_file" <<EOF
+          ## Upstream update detected
+
+          - Repository: [${UPSTREAM_REPOSITORY}](https://github.com/${UPSTREAM_REPOSITORY})
+          - Branch: \\`${UPSTREAM_BRANCH}\\`
+          - Latest commit: [\\`${upstream_sha}\\`](${upstream_url})
+          - Commit subject: ${upstream_message}
+          - Commit date: ${upstream_date}
+
+          ## Copilot task
+
+          Review the changes since the previous upstream checkpoint and create a PR only for compatible changes.
+
+          Do not blindly merge the upstream repository. This repository is a Cloudflare Worker implementation and must preserve:
+
+          - Cloudflare D1 and Durable Objects deployment
+          - the second KDF compatibility behavior
+          - Send access and file flows
+          - TOTP, recovery-code, profile, and sync compatibility
+          - allowlist and admin access controls
+          - production GitHub Actions deployment behavior
+
+          Prefer small, reviewable patches. Update or add D1 migrations when schema changes are required. Run \\`cargo fmt -- --check\\`, \\`cargo check\\`, and the WASM worker build when applicable. Do not deploy production from the agent branch.
+
+          ## Review checklist
+
+          - [ ] Identify the upstream API/protocol change and affected files.
+          - [ ] Confirm the change applies to this Worker architecture.
+          - [ ] Preserve existing Cloudflare-specific behavior.
+          - [ ] Add migration/tests if needed.
+          - [ ] Describe intentional non-portable upstream changes in the PR.
+
+          <!-- upstream-sha:${upstream_sha} -->
+          EOF
+
+          if [[ -n "$existing_number" ]]; then
+            gh issue comment "$existing_number" --repo "$GITHUB_REPOSITORY" --body-file "$body_file"
+            issue_number="$existing_number"
+          else
+            issue_number="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file "$body_file" | sed -n 's#.*/issues/##p')"
+          fi
+
+          if [[ -n "${issue_number:-}" ]]; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/assignees" \
+              -f 'assignees[]=copilot-swe-agent' >/dev/null 2>&1 || \
+              echo "Copilot assignment was unavailable; assign the issue to Copilot manually."
+            echo "Created or updated issue #${issue_number}."
+          fi

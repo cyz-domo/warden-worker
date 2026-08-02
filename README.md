@@ -178,7 +178,7 @@ curl -f https://你的域名/api/config
 
 ### 8. GitHub Actions 自动部署
 
-仓库提供四个 workflow：`Deploy test`（仅手动触发，读取 `test` Environment）、`Deploy production`（推送 `main` 或手动触发，读取 `production` Environment）、`Initialize test D1` 和 `Initialize production D1`（仅手动触发）。测试流程不会因代码推送自动运行，也不会读取或修改生产 Environment。
+仓库提供五个主要 workflow：`Deploy test`（仅手动触发，读取 `test` Environment）、`Deploy production`（推送 `main` 或手动触发，读取 `production` Environment）、`Initialize test D1`、`Initialize production D1`（仅手动触发）以及 `Check Vaultwarden upstream`（定时检查上游并创建兼容性 Issue）。测试流程不会因代码推送自动运行，也不会读取或修改生产 Environment。
 
 #### 第一次配置顺序
 
@@ -191,9 +191,17 @@ curl -f https://你的域名/api/config
 7. 首次部署测试时，在 Actions 页面手动运行 `Deploy test` 并选择要验证的 ref；生产推送 `main` 或手动运行 `Deploy production`。
 8. 如使用自定义域，在 Worker 部署后到 Cloudflare `Workers → Settings → Domains & Routes → Add Custom Domain` 绑定，再把该 URL 写入 `BASE_URL`。
 
-Workflow 每次按此顺序执行：检出代码 → 构建 Rust/WASM → 校验版本 → 用 Variables 生成 `/tmp/wrangler.deploy.jsonc` → 应用增量 D1 migration → 用 `wrangler secret put` 把 GitHub Secrets/Variables 同步为 Worker 运行时 Secrets → 部署 Worker/ Durable Object → 执行可选 smoke test。
+Workflow 每次按此顺序执行：检出代码 → 构建 Rust/WASM → 校验版本 → 用 Variables 在仓库根目录生成临时 Wrangler 配置 → 应用增量 D1 migration → 用 `wrangler secret put` 把 GitHub Secrets/Variables 同步为 Worker 运行时 Secrets → 部署 Worker/ Durable Object → 执行可选 smoke test。
 
 注意：`CLOUDFLARE_API_TOKEN` 只是 GitHub Actions 调用 Cloudflare API 的凭据，不会自动成为 Worker Secret；运行时的 JWT、TOTP、管理员和注册开关由 workflow 显式同步。D1 名称、D1 ID、Worker 名称不会再硬编码到自动部署配置；模板见 `wrangler.deploy.template.jsonc`，渲染脚本见 `scripts/render-wrangler-config.mjs`。
+
+### 8.1 Vaultwarden 上游兼容同步
+
+`.github/workflows/upstream-vaultwarden-sync.yml` 每周一检查 `dani-garcia/vaultwarden` 的 `main` 分支，也支持在 Actions 页面手动运行。发现新提交后，它会创建或更新一个上游兼容性 Issue，并尝试分配给 GitHub Copilot Coding Agent。
+
+该任务不会直接合并上游代码、修改 `main` 或部署生产。Copilot 应在独立分支中分析上游变化，只移植适用于 Cloudflare Worker 的 API、协议和数据模型改动，并保留 D1、Durable Objects、KDF、Send、2FA、白名单及部署逻辑。生成的 PR 需要人工审核后才能合并。
+
+首次使用前，在仓库 `Settings → Actions → General` 允许 Actions 创建 Issue/PR，并确认仓库已启用 Copilot Coding Agent。若自动分配不可用，Workflow 仍会创建 Issue，需要在 Issue 页面手动分配给 Copilot。建议为 `upstream-sync` 创建标签；如果标签不存在，Issue 创建步骤可能失败。
 
 ### 9. 备份、升级和回滚
 
