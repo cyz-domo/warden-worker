@@ -138,6 +138,9 @@ jobs:
           ahead_by="${{ steps.summary.outputs.ahead_by }}"
           summary_file="${{ steps.summary.outputs.summary_file }}"
 
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           if [[ "$has_changes" == "true" ]]; then
             default_branch="$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef -q .defaultBranchRef.name)"
             branch="upstream-sync/${upstream_date}"
@@ -150,8 +153,6 @@ jobs:
               pr_number="$open_pr"
               echo "Updated summary PR #${open_pr}."
             else
-              git config user.name "github-actions[bot]"
-              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
               git checkout -B "$branch"
               git add "$summary_file"
               git commit -m "docs(upstream): vaultwarden change summary ${upstream_date}"
