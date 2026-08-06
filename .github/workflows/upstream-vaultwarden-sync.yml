@@ -1,4 +1,4 @@
-name: Check Vaultwarden upstream
+name: Sync Vaultwarden upstream
 
 on:
   schedule:
@@ -6,55 +6,179 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   issues: write
   pull-requests: write
 
+concurrency:
+  group: vaultwarden-upstream-sync
+  cancel-in-progress: false
+
 jobs:
-  check-upstream:
+  sync-upstream:
     runs-on: ubuntu-latest
     env:
       UPSTREAM_REPOSITORY: dani-garcia/vaultwarden
       UPSTREAM_BRANCH: main
-      ISSUE_TITLE: "[Upstream sync] Vaultwarden compatibility review"
+      CHECKPOINT_BRANCH: upstream-checkpoint
+      SUMMARY_DIR: docs/upstream
+
     steps:
-      - name: Check upstream and notify Copilot
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build upstream change summary
+        id: summary
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          # Latest upstream commit (the checkpoint target).
           upstream_json="$(gh api "repos/${UPSTREAM_REPOSITORY}/commits/${UPSTREAM_BRANCH}")"
           upstream_sha="$(jq -r '.sha' <<<"$upstream_json")"
           upstream_message="$(jq -r '.commit.message' <<<"$upstream_json" | head -n 1)"
-          upstream_date="$(jq -r '.commit.author.date' <<<"$upstream_json")"
-          upstream_url="https://github.com/${UPSTREAM_REPOSITORY}/commit/${upstream_sha}"
+          upstream_date="$(jq -r '.commit.author.date' <<<"$upstream_json" | cut -dT -f1)"
 
-          open_issues="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "${ISSUE_TITLE} in:title" --json number,title,body --limit 20)"
-          existing_number="$(jq -r --arg title "$ISSUE_TITLE" '[.[] | select(.title == $title)][0].number // empty' <<<"$open_issues")"
-          existing_body="$(jq -r --arg title "$ISSUE_TITLE" '[.[] | select(.title == $title)][0].body // empty' <<<"$open_issues")"
+          # Last tracked upstream SHA lives in checkpoint.sha on the checkpoint branch.
+          if git fetch --depth=1 origin "refs/heads/${CHECKPOINT_BRANCH}" 2>/dev/null; then
+            base_sha="$(git show FETCH_HEAD:checkpoint.sha 2>/dev/null || true)"
+          else
+            base_sha=""
+          fi
 
-          if grep -Fq "$upstream_sha" <<<"$existing_body"; then
-            echo "Upstream commit $upstream_sha is already tracked."
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          echo "upstream_message=$upstream_message" >> "$GITHUB_OUTPUT"
+          echo "upstream_date=$upstream_date" >> "$GITHUB_OUTPUT"
+
+          if [[ -z "$base_sha" ]]; then
+            echo "No checkpoint found; this run establishes the baseline (${upstream_sha})."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          body_file="$(mktemp)"
-          trap 'rm -f "$body_file"' EXIT
-          cat >"$body_file" <<EOF
-          ## Upstream update detected
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
 
-          - Repository: [${UPSTREAM_REPOSITORY}](https://github.com/${UPSTREAM_REPOSITORY})
-          - Branch: \\`${UPSTREAM_BRANCH}\\`
-          - Latest commit: [\\`${upstream_sha}\\`](${upstream_url})
-          - Commit subject: ${upstream_message}
-          - Commit date: ${upstream_date}
+          if [[ "$base_sha" == "$upstream_sha" ]]; then
+            echo "Upstream is unchanged since checkpoint ${base_sha}."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-          ## Copilot task
+          # Fetch the full comparison once; keep it for the summary generation.
+          compare_json="$(gh api "repos/${UPSTREAM_REPOSITORY}/compare/${base_sha}...${upstream_sha}")"
+          compare_json_file=/tmp/vaultwarden-compare.json
+          echo "$compare_json" > "$compare_json_file"
+          ahead_by="$(jq -r '.ahead_by' <<<"$compare_json")"
+          files_total="$(jq '[.files[]?] | length' <<<"$compare_json")"
+          compare_url="https://github.com/${UPSTREAM_REPOSITORY}/compare/${base_sha}...${upstream_sha}"
 
-          Review the changes since the previous upstream checkpoint and create a PR only for compatible changes.
+          summary_file="${SUMMARY_DIR}/vaultwarden-${upstream_date}.md"
+          mkdir -p "$(dirname "$summary_file")"
 
-          Do not blindly merge the upstream repository. This repository is a Cloudflare Worker implementation and must preserve:
+          {
+            echo "# Vaultwarden 上游变更摘要（${upstream_date}）"
+            echo
+            echo "- 上游仓库：[${UPSTREAM_REPOSITORY}](https://github.com/${UPSTREAM_REPOSITORY})"
+            echo "- 对比区间：\`${base_sha:0:10}\` → \`${upstream_sha:0:10}\`（[查看完整 compare](${compare_url})）"
+            echo "- 提交数：${ahead_by}；变更文件数：${files_total}"
+            echo "- 生成时间：$(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo
+            echo "> 本 PR 仅为变更摘要，不包含代码改动。请评估后只移植适用于本 Cloudflare Worker（D1 + Durable Objects）实现的协议/API/安全相关改动，并保留 KDF、Send、2FA、白名单及部署逻辑。"
+            echo
+            echo "## 提交列表"
+            echo
+            jq -r --arg repo "${UPSTREAM_REPOSITORY}" '.commits[]? | "- [`" + .sha[0:8] + "`](https://github.com/" + $repo + "/commit/" + .sha + ") " + (.commit.message | split("\n")[0])' "$compare_json_file" | head -n 100
+            if (( ahead_by > 100 )); then
+              echo
+              echo "> 仅列出前 100 条提交（共 ${ahead_by} 条），完整列表见上方 compare 链接。"
+            fi
+            echo
+            echo "## 变更文件（前 200 个）"
+            echo
+            jq -r '.files[]? | "- " + .status + " `" + .filename + "` (+" + (.additions|tostring) + "/-" + (.deletions|tostring) + ")"' "$compare_json_file" | head -n 200
+            if (( files_total > 200 )); then
+              echo
+              echo "> 仅列出前 200 个文件（共 ${files_total} 个），完整列表见上方 compare 链接。"
+            fi
+            echo
+            echo "## 可能影响协议/客户端兼容性的文件"
+            echo
+            relevant="$(jq -r '.files[]?.filename' "$compare_json_file" | grep -iE '(^|/)(src/api|src/db|migrations|crates|api|auth|sync|send|keys|devices?|two_factor|emergency|organizations?|folders?|collections?|notifications|push)/|cipher|kdf|totp|recovery|known_device' | sort -u | head -n 60)"
+            if [[ -n "$relevant" ]]; then
+              printf '%s\n' "$relevant" | sed 's/^/- `/' | sed 's/$/`/'
+            else
+              echo "- （无）"
+            fi
+            echo
+            echo "## 建议动作"
+            echo
+            echo "- [ ] 对照上面的文件评估是否影响 Bitwarden 协议/客户端兼容性"
+            echo "- [ ] 需要时新增 D1 增量 migration（\`migrations/\`）"
+            echo "- [ ] 验证 \`cargo fmt -- --check\`、\`cargo check\` 和 WASM worker 构建"
+            echo "- [ ] 如需跟进，另开独立 PR 只移植兼容改动，不直接合并上游"
+          } > "$summary_file"
+
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          echo "summary_file=$summary_file" >> "$GITHUB_OUTPUT"
+          echo "ahead_by=$ahead_by" >> "$GITHUB_OUTPUT"
+
+      - name: Create summary PR and advance checkpoint
+        if: steps.summary.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          has_changes="${{ steps.summary.outputs.has_changes }}"
+          upstream_sha="${{ steps.summary.outputs.upstream_sha }}"
+          upstream_message="${{ steps.summary.outputs.upstream_message }}"
+          upstream_date="${{ steps.summary.outputs.upstream_date }}"
+          base_sha="${{ steps.summary.outputs.base_sha }}"
+          ahead_by="${{ steps.summary.outputs.ahead_by }}"
+          summary_file="${{ steps.summary.outputs.summary_file }}"
+
+          if [[ "$has_changes" == "true" ]]; then
+            default_branch="$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef -q .defaultBranchRef.name)"
+            branch="upstream-sync/${upstream_date}"
+            pr_title="[Upstream sync] Vaultwarden changes summary ${upstream_date}"
+            compare_url="https://github.com/${UPSTREAM_REPOSITORY}/compare/${base_sha}...${upstream_sha}"
+
+            open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --search "\"${pr_title}\" in:title" --json number --limit 5 | jq -r '.[0].number // empty')"
+            if [[ -n "$open_pr" ]]; then
+              gh pr edit "$open_pr" --repo "$GITHUB_REPOSITORY" --body-file "$summary_file" >/dev/null
+              pr_number="$open_pr"
+              echo "Updated summary PR #${open_pr}."
+            else
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git checkout -B "$branch"
+              git add "$summary_file"
+              git commit -m "docs(upstream): vaultwarden change summary ${upstream_date}"
+              git push --force origin "HEAD:refs/heads/${branch}"
+              pr_number="$(gh pr create --repo "$GITHUB_REPOSITORY" --base "$default_branch" --head "$branch" --title "$pr_title" --body-file "$summary_file" | sed -n 's#.*/pull/##p')"
+              echo "Created summary PR #${pr_number}."
+            fi
+
+            # Create or update the porting task issue and assign it to Copilot.
+            porting_title="[Upstream sync] Port Vaultwarden changes ${upstream_date}"
+            pr_url="https://github.com/${GITHUB_REPOSITORY}/pull/${pr_number}"
+            porting_body_file="$(mktemp)"
+            cat >"$porting_body_file" <<EOF
+          ## Upstream porting task
+
+          The weekly summary PR is #${pr_number}: [${pr_title}](${pr_url})
+
+          - Upstream repository: [${UPSTREAM_REPOSITORY}](https://github.com/${UPSTREAM_REPOSITORY})
+          - Compare: \`${base_sha:0:10}\` → \`${upstream_sha:0:10}\` ([view compare](${compare_url}))
+          - Commits since checkpoint: ${ahead_by}
+          - Latest upstream commit: [\`${upstream_sha}\`](https://github.com/${UPSTREAM_REPOSITORY}/commit/${upstream_sha}) — ${upstream_message}
+
+          ## Task for Copilot
+
+          Review the changes in the summary PR and open a separate code PR that ports only compatible changes. Do not modify or merge the summary PR.
+
+          Must preserve:
 
           - Cloudflare D1 and Durable Objects deployment
           - the second KDF compatibility behavior
@@ -63,29 +187,44 @@ jobs:
           - allowlist and admin access controls
           - production GitHub Actions deployment behavior
 
-          Prefer small, reviewable patches. Update or add D1 migrations when schema changes are required. Run \\`cargo fmt -- --check\\`, \\`cargo check\\`, and the WASM worker build when applicable. Do not deploy production from the agent branch.
+          Requirements:
 
-          ## Review checklist
-
-          - [ ] Identify the upstream API/protocol change and affected files.
-          - [ ] Confirm the change applies to this Worker architecture.
-          - [ ] Preserve existing Cloudflare-specific behavior.
-          - [ ] Add migration/tests if needed.
-          - [ ] Describe intentional non-portable upstream changes in the PR.
-
-          <!-- upstream-sha:${upstream_sha} -->
+          - Open small, reviewable code PRs; prefer one logical change per PR.
+          - Add or update D1 migrations in \`migrations/\` when schema changes are required.
+          - Run \`cargo fmt -- --check\`, \`cargo check\`, and the WASM worker build before opening a PR.
+          - Do not deploy production from the agent branch.
+          - Do not merge your own PR. It must pass the existing checks (e.g. \`Deploy test\` / smoke test) and be reviewed and merged by a human.
+          - Describe intentional non-portable upstream changes in the PR description.
           EOF
 
-          if [[ -n "$existing_number" ]]; then
-            gh issue comment "$existing_number" --repo "$GITHUB_REPOSITORY" --body-file "$body_file"
-            issue_number="$existing_number"
-          else
-            issue_number="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file "$body_file" | sed -n 's#.*/issues/##p')"
+            open_porting="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"${porting_title}\" in:title" --json number --limit 5 | jq -r '.[0].number // empty')"
+            if [[ -n "$open_porting" ]]; then
+              gh issue edit "$open_porting" --repo "$GITHUB_REPOSITORY" --body-file "$porting_body_file" >/dev/null
+              porting_number="$open_porting"
+              echo "Updated porting task issue #${porting_number}."
+            else
+              porting_number="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "$porting_title" --body-file "$porting_body_file" | sed -n 's#.*/issues/##p')"
+              echo "Created porting task issue #${porting_number}."
+            fi
+
+            if [[ -n "${porting_number:-}" ]]; then
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${porting_number}/assignees" \
+                -f 'assignees[]=copilot-swe-agent' >/dev/null 2>&1 || \
+                echo "Copilot assignment was unavailable; assign issue #${porting_number} to Copilot manually."
+            fi
           fi
 
-          if [[ -n "${issue_number:-}" ]]; then
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${issue_number}/assignees" \
-              -f 'assignees[]=copilot-swe-agent' >/dev/null 2>&1 || \
-              echo "Copilot assignment was unavailable; assign the issue to Copilot manually."
-            echo "Created or updated issue #${issue_number}."
+          # Advance the checkpoint branch so the next run starts from this head.
+          if git fetch --depth=1 origin "refs/heads/${CHECKPOINT_BRANCH}" 2>/dev/null; then
+            git checkout -q -B "${CHECKPOINT_BRANCH}" FETCH_HEAD
+          else
+            git checkout -q -B "${CHECKPOINT_BRANCH}"
           fi
+          echo "$upstream_sha" > checkpoint.sha
+          git add checkpoint.sha
+          if ! git diff --cached --quiet; then
+            git commit -q -m "chore(upstream): advance checkpoint to ${upstream_sha:0:10}"
+          fi
+          git push --force origin "HEAD:refs/heads/${CHECKPOINT_BRANCH}"
+          git checkout -q -f -
+          echo "Checkpoint advanced to ${upstream_sha}."

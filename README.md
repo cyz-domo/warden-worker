@@ -178,7 +178,7 @@ curl -f https://你的域名/api/config
 
 ### 8. GitHub Actions 自动部署
 
-仓库提供五个主要 workflow：`Deploy test`（仅手动触发，读取 `test` Environment）、`Deploy production`（推送 `main` 或手动触发，读取 `production` Environment）、`Initialize test D1`、`Initialize production D1`（仅手动触发）以及 `Check Vaultwarden upstream`（定时检查上游并创建兼容性 Issue）。测试流程不会因代码推送自动运行，也不会读取或修改生产 Environment。
+仓库提供五个主要 workflow：`Deploy test`（仅手动触发，读取 `test` Environment）、`Deploy production`（推送 `main` 或手动触发，读取 `production` Environment）、`Initialize test D1`、`Initialize production D1`（仅手动触发）以及 `Sync Vaultwarden upstream`（定时检查上游并自动生成变更摘要 PR）。测试流程不会因代码推送自动运行，也不会读取或修改生产 Environment。
 
 #### 第一次配置顺序
 
@@ -197,11 +197,17 @@ Workflow 每次按此顺序执行：检出代码 → 构建 Rust/WASM → 校验
 
 ### 8.1 Vaultwarden 上游兼容同步
 
-`.github/workflows/upstream-vaultwarden-sync.yml` 每周一检查 `dani-garcia/vaultwarden` 的 `main` 分支，也支持在 Actions 页面手动运行。发现新提交后，它会创建或更新一个上游兼容性 Issue，并尝试分配给 GitHub Copilot Coding Agent。
+`.github/workflows/upstream-vaultwarden-sync.yml`（`Sync Vaultwarden upstream`）每周一检查 `dani-garcia/vaultwarden` 的 `main` 分支，也支持在 Actions 页面手动运行。发现新提交后，它会：
 
-该任务不会直接合并上游代码、修改 `main` 或部署生产。Copilot 应在独立分支中分析上游变化，只移植适用于 Cloudflare Worker 的 API、协议和数据模型改动，并保留 D1、Durable Objects、KDF、Send、2FA、白名单及部署逻辑。生成的 PR 需要人工审核后才能合并。
+1. 自动生成「变更摘要 PR」：列出对比区间、提交列表、变更文件，并单独标注可能影响 Bitwarden 协议/客户端兼容性的文件；摘要文档提交在 `docs/upstream/vaultwarden-<日期>.md`。
+2. 创建/更新「移植任务 Issue」（`[Upstream sync] Port Vaultwarden changes <日期>`），引用摘要 PR 并自动分配给 GitHub Copilot Coding Agent。
+3. 把检查点推进到已检查到的上游 commit（存于仓库 `upstream-checkpoint` 分支的 `checkpoint.sha`），下次运行从该位置继续对比。
 
-首次使用前，在仓库 `Settings → Actions → General` 允许 Actions 创建 Issue/PR，并确认仓库已启用 Copilot Coding Agent。若自动分配不可用，Workflow 仍会创建 Issue，需要在 Issue 页面手动分配给 Copilot。建议为 `upstream-sync` 创建标签；如果标签不存在，Issue 创建步骤可能失败。
+Copilot 收到任务后会分析摘要 PR，只把适用于 Cloudflare Worker 的 API、协议和数据模型改动移植成独立代码 PR，并保留 D1、Durable Objects、KDF、Send、2FA、白名单及部署逻辑；需要 schema 变化时补充 D1 migration。摘要 PR 本身只含文档，不会被合并代码。
+
+合并策略：Copilot 的代码 PR 不会自动合入 `main`。它必须通过仓库现有检查（`Deploy test` / smoke test）并由人工 review 后合并；如需启用自动合并，请先配置 `main` 分支保护（required checks + review），再对代码 PR 开启 auto-merge。
+
+运行前提：仓库 `Settings → Actions → General` 允许 Actions 创建 Issue/PR，并启用 Issues 和 Copilot Coding Agent（若自动分配不可用，需在 Issue 页面手动分配）。首次运行只建立检查点基线、不生成 PR；第二次起每周一自动执行上述流程。
 
 ### 9. 备份、升级和回滚
 
