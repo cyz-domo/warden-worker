@@ -245,6 +245,7 @@ pub async fn get_recovery(
                 .run()
                 .await
                 .map_err(|_| AppError::Database)?;
+            two_factor::revoke_device_remember_tokens(&db, &claims.sub).await?;
             code
         }
     };
@@ -300,6 +301,7 @@ pub async fn activate_authenticator(
         .run()
         .await
         .map_err(|_| AppError::Database)?;
+    two_factor::revoke_device_remember_tokens(&db, &claims.sub).await?;
 
     Ok(Json(json!({
         "enabled": true,
@@ -353,6 +355,7 @@ pub async fn disable_authenticator_vw(
         if secret_encoded.eq_ignore_ascii_case(payload.key.trim()) {
             two_factor::disable_authenticator(&db, &claims.sub).await?;
             two_factor::clear_recovery_code(&db, &claims.sub).await?;
+            two_factor::revoke_device_remember_tokens(&db, &claims.sub).await?;
         } else {
             return Err(AppError::BadRequest(
                 "TOTP key does not match recorded value".to_string(),
@@ -405,6 +408,7 @@ pub async fn authenticator_enable(
     }
 
     two_factor::upsert_authenticator_secret(&db, &claims.sub, secret_enc, true, &now).await?;
+    two_factor::revoke_device_remember_tokens(&db, &claims.sub).await?;
     Ok(Json(json!({})))
 }
 
@@ -430,5 +434,6 @@ pub async fn authenticator_disable(
 
     two_factor::disable_authenticator(&db, &claims.sub).await?;
     two_factor::clear_recovery_code(&db, &claims.sub).await?;
+    two_factor::revoke_device_remember_tokens(&db, &claims.sub).await?;
     Ok(Json(json!({})))
 }
