@@ -475,11 +475,12 @@ pub async fn change_master_password(
         kdf_iterations.into(),
         security_stamp.into(),
         now.into(),
-        claims.sub.into(),
+        claims.sub.clone().into(),
     ])?
     .run()
     .await
     .map_err(|_| AppError::Database)?;
+    crate::two_factor::revoke_device_remember_tokens(&db, &claims.sub).await?;
 
     Ok(Json(json!({})))
 }

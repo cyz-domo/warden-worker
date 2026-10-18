@@ -127,6 +127,39 @@ pub async fn disable_authenticator(db: &D1Database, user_id: &str) -> Result<(),
     Ok(())
 }
 
+// Ported from vaultwarden #7682: credential or 2FA changes must invalidate remembered devices.
+pub async fn revoke_device_remember_tokens(db: &D1Database, user_id: &str) -> Result<(), AppError> {
+    db.prepare(
+        "CREATE TABLE IF NOT EXISTS devices (
+            id TEXT PRIMARY KEY NOT NULL,
+            user_id TEXT NOT NULL,
+            device_identifier TEXT NOT NULL,
+            device_name TEXT,
+            device_type INTEGER,
+            remember_token_hash TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, device_identifier),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )",
+    )
+    .run()
+    .await
+    .map_err(|_| AppError::Database)?;
+
+    let _ = db
+        .prepare("ALTER TABLE devices ADD COLUMN remember_token_hash TEXT")
+        .run()
+        .await;
+
+    db.prepare("UPDATE devices SET remember_token_hash = NULL, updated_at = ?2 WHERE user_id = ?1")
+        .bind(&[user_id.into(), chrono::Utc::now().to_rfc3339().into()])?
+        .run()
+        .await
+        .map_err(|_| AppError::Database)?;
+    Ok(())
+}
+
 pub fn encrypt_secret_with_optional_key(
     two_factor_enc_key_b64: Option<&str>,
     user_id: &str,
