@@ -238,6 +238,10 @@ TWO_FACTOR_ENC_KEY=<base64-32-byte-key>
 
 检查 `grant_type`、refresh token 是否过期，以及客户端是否连接了正确环境。`/identity/connect/token` 支持 password、refresh_token 和 send_access 流程。
 
+### prelogin 返回 429
+
+`/identity/accounts/prelogin` 与 `/api/accounts/prelogin`（含 `/password` 变体）在未登录情况下会返回账号真实的 KDF 参数，因此按客户端地址计数：每个地址每 60 秒 30 次，超出返回 429 并带 `Retry-After: 60`，与上游 #7681 的思路一致。计数保存在处理请求的 isolate 内存里（`prelogin` 走 HeavyDo，`/password` 变体走 Worker），isolate 回收后重新起算，属于尽力而为的限制；`/identity/connect/token` 不受该计数影响。
+
 ### 发送文本失败
 
 客户端先通过 `grant_type=send_access` 获取短期 token，再使用 Bearer token 调用 `/api/sends/access`；普通用户 JWT 不能代替 Send access token。

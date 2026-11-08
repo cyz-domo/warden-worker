@@ -1,4 +1,8 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    Json,
+};
 use chrono::Utc;
 use constant_time_eq::constant_time_eq;
 use serde::Deserialize;
@@ -234,11 +238,26 @@ pub async fn delete_account_post(
     delete_account_impl(claims, env, payload).await
 }
 
+// Ported from vaultwarden #7681: the prelogin routes are unauthenticated and answer
+// with the stored account's real KDF parameters, so they are metered per client.
+fn limit_unauthenticated_prelogin(headers: &HeaderMap) -> Result<(), AppError> {
+    let client = headers
+        .get("cf-connecting-ip")
+        .and_then(|value| value.to_str().ok());
+    if crate::ratelimit::prelogin_allowed(client) {
+        Ok(())
+    } else {
+        Err(AppError::TooManyRequests)
+    }
+}
+
 #[worker::send]
 pub async fn prelogin(
     State(env): State<Arc<Env>>,
+    headers: HeaderMap,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<PreloginResponse>, AppError> {
+    limit_unauthenticated_prelogin(&headers)?;
     let email = payload["email"]
         .as_str()
         .ok_or_else(|| AppError::BadRequest("Missing email".to_string()))?;
@@ -262,8 +281,10 @@ pub async fn prelogin(
 #[worker::send]
 pub async fn prelogin_password(
     State(env): State<Arc<Env>>,
+    headers: HeaderMap,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    limit_unauthenticated_prelogin(&headers)?;
     let email = payload["email"]
         .as_str()
         .ok_or_else(|| AppError::BadRequest("Missing email".to_string()))?;
