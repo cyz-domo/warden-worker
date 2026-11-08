@@ -539,7 +539,7 @@ pub async fn change_email(
         kdf_iterations.into(),
         security_stamp.into(),
         now.into(),
-        claims.sub.into(),
+        claims.sub.clone().into(),
     ])?
     .run()
     .await
@@ -550,6 +550,8 @@ pub async fn change_email(
             AppError::Database
         }
     })?;
+
+    crate::two_factor::revoke_device_remember_tokens(&db, &claims.sub).await?;
 
     Ok(Json(json!({})))
 }
