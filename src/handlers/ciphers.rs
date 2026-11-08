@@ -13,10 +13,18 @@ use crate::models::cipher::{
 };
 use axum::extract::Path;
 use serde::Deserialize;
+use serde_json::json;
 
 #[derive(Debug, Deserialize)]
 pub struct CipherIdsRequest {
     ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveCiphersRequest {
+    ids: Vec<String>,
+    folder_id: Option<String>,
 }
 
 #[worker::send]
@@ -495,4 +503,31 @@ pub async fn hard_delete_ciphers_delete(
     Json(payload): Json<CipherIdsRequest>,
 ) -> Result<Json<()>, AppError> {
     hard_delete_ciphers(claims, State(env), Json(payload)).await
+}
+
+#[worker::send]
+pub async fn move_ciphers(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Json(payload): Json<MoveCiphersRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = db::get_db(&env)?;
+    let now = Utc::now();
+    let now = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+
+    for id in payload.ids {
+        query!(
+            &db,
+            "UPDATE ciphers SET folder_id = ?1, updated_at = ?2 WHERE id = ?3 AND user_id = ?4",
+            payload.folder_id,
+            now,
+            id,
+            claims.sub
+        )
+        .map_err(|_| AppError::Database)?
+        .run()
+        .await?;
+    }
+
+    Ok(Json(json!({ "object": "ciphers", "data": [] })))
 }

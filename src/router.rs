@@ -172,6 +172,7 @@ pub fn api_router(env: Env) -> Router {
             put(ciphers::soft_delete_ciphers).post(ciphers::hard_delete_ciphers),
         )
         .route("/api/ciphers/restore", put(ciphers::restore_ciphers))
+        .route("/api/ciphers/move", put(ciphers::move_ciphers))
         // Folders CRUD
         .route("/api/folders", post(folders::create_folder))
         .route("/api/folders/{id}", put(folders::update_folder))
