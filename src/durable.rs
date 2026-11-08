@@ -21,7 +21,8 @@ impl DurableObject for HeavyDo {
         let _ = console_log::init_with_level(log::Level::Debug);
         let _ = &self.state;
 
-        let http_req: HttpRequest = req.try_into()?;
+        let mut http_req: HttpRequest = req.try_into()?;
+        crate::rewrite_admin_prefix(&mut http_req);
         let cors = CorsLayer::new()
             .allow_methods(Any)
             .allow_headers(Any)
