@@ -110,6 +110,9 @@ openssl rand -base64 32
 | `ADMIN_EMAIL` | 首次部署前 | 管理员邮箱；对应账号需要先注册 |
 | `SIGNUPS_ALLOWED` | 首次部署前 | `true` 开放注册，`false` 关闭注册 |
 | `TWO_FACTOR_ENC_KEY` | 启用 TOTP 前 | 建议首次部署前配置，避免后续更换加密方式 |
+| `TWO_FACTOR_REMEMBER_DAYS` | 可选 | remember-device（provider=5）记住登录的有效天数，取值 1 到 90，未设置时按 30 天，与上游 `TWO_FACTOR_REMEMBER_DAYS` 同名同义 |
+
+已有部署不需要额外的迁移步骤：Worker 会在首次使用 remember-device 时自动为 `devices` 表补上 `remember_expires_at` 列（与 `remember_token_hash` 相同的处理方式），全新安装则由 `sql/schema_full.sql` 建表时带上该列。改动之前签发的 remember token 没有记录过期时间，会被视为已过期：相关设备下一次登录需要重新输入一次 TOTP，之后按新的有效期记住。
 
 如果已经完成构建但还没有设置 Secrets，可以直接设置后再执行部署，不需要重新构建：
 

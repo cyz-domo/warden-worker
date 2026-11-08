@@ -2,7 +2,7 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::{extract::State, response::IntoResponse, Form, Json};
 use base64::{engine::general_purpose, Engine as _};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use constant_time_eq::constant_time_eq;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use rand::RngCore;
@@ -296,6 +296,7 @@ async fn ensure_devices_table(db: &worker::D1Database) -> Result<(), AppError> {
             device_name TEXT,
             device_type INTEGER,
             remember_token_hash TEXT,
+            remember_expires_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, device_identifier),
@@ -311,7 +312,32 @@ async fn ensure_devices_table(db: &worker::D1Database) -> Result<(), AppError> {
         .run()
         .await;
 
+    let _ = db
+        .prepare("ALTER TABLE devices ADD COLUMN remember_expires_at TEXT")
+        .run()
+        .await;
+
     Ok(())
+}
+
+// Ported from vaultwarden #7421: remembered 2FA logins expire, 30 days by default.
+fn remember_expires_at(env: &Env) -> String {
+    let days = env
+        .secret("TWO_FACTOR_REMEMBER_DAYS")
+        .ok()
+        .and_then(|secret| secret.to_string().trim().parse::<i64>().ok())
+        .unwrap_or(30)
+        .clamp(1, 90);
+    (Utc::now() + Duration::days(days)).to_rfc3339()
+}
+
+fn remember_token_is_live(expires_at: Option<&str>) -> bool {
+    let Some(expires_at) = expires_at else {
+        return false;
+    };
+    DateTime::parse_from_rfc3339(expires_at)
+        .map(|expires_at| expires_at.with_timezone(&Utc) > Utc::now())
+        .unwrap_or(false)
 }
 
 fn sha256_hex(input: &str) -> String {
@@ -482,18 +508,26 @@ pub async fn token(
                     ensure_devices_table(&db).await?;
                     let row: Option<Value> = db
                         .prepare(
-                            "SELECT remember_token_hash FROM devices WHERE user_id = ?1 AND device_identifier = ?2",
+                            "SELECT remember_token_hash, remember_expires_at FROM devices WHERE user_id = ?1 AND device_identifier = ?2",
                         )
                         .bind(&[user.id.clone().into(), device_identifier.into()])?
                         .first(None)
                         .await
                         .map_err(|_| AppError::Database)?;
                     let stored_hash = row
+                        .as_ref()
                         .and_then(|v| v.get("remember_token_hash").cloned())
                         .and_then(|v| v.as_str().map(|s| s.to_string()));
                     let Some(stored_hash) = stored_hash else {
                         return Ok(two_factor_required_response());
                     };
+                    if !remember_token_is_live(
+                        row.as_ref()
+                            .and_then(|v| v.get("remember_expires_at"))
+                            .and_then(|v| v.as_str()),
+                    ) {
+                        return Ok(two_factor_required_response());
+                    }
                     let candidate_hash = sha256_hex(token.trim());
                     if !constant_time_eq(stored_hash.as_bytes(), candidate_hash.as_bytes()) {
                         return Ok(two_factor_required_response());
@@ -536,6 +570,7 @@ pub async fn token(
                     }
                     two_factor::disable_authenticator(&db, &user.id).await?;
                     two_factor::clear_recovery_code(&db, &user.id).await?;
+                    two_factor::revoke_device_remember_tokens(&db, &user.id).await?;
                 } else {
                     return Ok(two_factor_required_response());
                 }
@@ -563,15 +598,19 @@ pub async fn token(
 
                 let now = Utc::now().to_rfc3339();
                 let remember_hash = remember_token_to_return.as_deref().map(sha256_hex);
+                let remember_expiry = remember_token_to_return
+                    .as_deref()
+                    .map(|_| remember_expires_at(&env));
 
                 db.prepare(
-                    "INSERT INTO devices (id, user_id, device_identifier, device_name, device_type, remember_token_hash, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    "INSERT INTO devices (id, user_id, device_identifier, device_name, device_type, remember_token_hash, remember_expires_at, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                      ON CONFLICT(user_id, device_identifier) DO UPDATE SET
                        updated_at = excluded.updated_at,
                        device_name = COALESCE(excluded.device_name, devices.device_name),
                        device_type = COALESCE(excluded.device_type, devices.device_type),
-                       remember_token_hash = COALESCE(excluded.remember_token_hash, devices.remember_token_hash)",
+                       remember_token_hash = COALESCE(excluded.remember_token_hash, devices.remember_token_hash),
+                       remember_expires_at = COALESCE(excluded.remember_expires_at, devices.remember_expires_at)",
                 )
                 .bind(&[
                     Uuid::new_v4().to_string().into(),
@@ -580,6 +619,7 @@ pub async fn token(
                     js_opt_string(device_name.clone()),
                     js_opt_i64(device_type.map(|v| v as i64)),
                     js_opt_string(remember_hash.clone()),
+                    js_opt_string(remember_expiry),
                     now.clone().into(),
                     now.into(),
                 ])?

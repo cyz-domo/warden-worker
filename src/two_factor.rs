@@ -137,6 +137,7 @@ pub async fn revoke_device_remember_tokens(db: &D1Database, user_id: &str) -> Re
             device_name TEXT,
             device_type INTEGER,
             remember_token_hash TEXT,
+            remember_expires_at TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(user_id, device_identifier),
@@ -152,11 +153,20 @@ pub async fn revoke_device_remember_tokens(db: &D1Database, user_id: &str) -> Re
         .run()
         .await;
 
-    db.prepare("UPDATE devices SET remember_token_hash = NULL, updated_at = ?2 WHERE user_id = ?1")
-        .bind(&[user_id.into(), chrono::Utc::now().to_rfc3339().into()])?
+    let _ = db
+        .prepare("ALTER TABLE devices ADD COLUMN remember_expires_at TEXT")
         .run()
-        .await
-        .map_err(|_| AppError::Database)?;
+        .await;
+
+    db.prepare(
+        "UPDATE devices
+         SET remember_token_hash = NULL, remember_expires_at = NULL, updated_at = ?2
+         WHERE user_id = ?1",
+    )
+    .bind(&[user_id.into(), chrono::Utc::now().to_rfc3339().into()])?
+    .run()
+    .await
+    .map_err(|_| AppError::Database)?;
     Ok(())
 }
 

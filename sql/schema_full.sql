@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS devices (
     device_name TEXT,
     device_type INTEGER,
     remember_token_hash TEXT,
+    remember_expires_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(user_id, device_identifier),
