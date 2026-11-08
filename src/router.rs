@@ -28,6 +28,8 @@ pub fn api_router(env: Env) -> Router {
             get(|| async { Html(include_str!("../static/demo.html")) }),
         )
         .route("/admin.html", get(admin_page))
+        .route("/admin", get(admin_page))
+        .route("/admin/", get(admin_page))
         // Identity/Auth routes
         .route("/identity/accounts/prelogin", post(accounts::prelogin))
         .route(

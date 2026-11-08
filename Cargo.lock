@@ -1606,6 +1606,7 @@ dependencies = [
  "constant_time_eq",
  "getrandom 0.3.3",
  "hex",
+ "http",
  "js-sys",
  "jsonwebtoken",
  "log",

@@ -35,7 +35,8 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<web_sys::Resp
 
     let mut app = router::api_router(env).layer(cors);
 
-    let http_req: HttpRequest = req.try_into()?;
+    let mut http_req: HttpRequest = req.try_into()?;
+    rewrite_admin_prefix(&mut http_req);
     Ok(worker::response_to_wasm(app.call(http_req).await?)?)
 }
 
@@ -44,11 +45,52 @@ fn should_offload(req: &Request) -> bool {
         return false;
     }
 
+    let path = req.path();
     matches!(
-        req.path().as_str(),
+        strip_admin_prefix(&path),
         "/identity/accounts/prelogin"
             | "/api/accounts/prelogin"
             | "/identity/accounts/register/finish"
             | "/identity/connect/token"
     )
+}
+
+const ADMIN_PREFIX: &str = "/admin";
+
+/// Upstream serves its admin console from `/admin`, so a client once pointed at
+/// that path can persist it as its environment base URL and keep prefixing every
+/// API call with `/admin`. Accept those calls instead of failing on them.
+fn strip_admin_prefix(path: &str) -> &str {
+    match path.strip_prefix(ADMIN_PREFIX) {
+        Some(rest)
+            if rest.starts_with("/api/")
+                || rest.starts_with("/identity/")
+                || rest.starts_with("/sends/") =>
+        {
+            rest
+        }
+        _ => path,
+    }
+}
+
+pub(crate) fn rewrite_admin_prefix(req: &mut HttpRequest) {
+    let path = req.uri().path();
+    let stripped = strip_admin_prefix(path);
+    if stripped == path {
+        return;
+    }
+
+    let path_and_query = match req.uri().query() {
+        Some(query) => format!("{stripped}?{query}"),
+        None => stripped.to_string(),
+    };
+    let mut builder = http::Uri::builder().path_and_query(path_and_query);
+    if let (Some(scheme), Some(authority)) = (req.uri().scheme(), req.uri().authority()) {
+        builder = builder
+            .scheme(scheme.as_str())
+            .authority(authority.as_str());
+    }
+    if let Ok(uri) = builder.build() {
+        *req.uri_mut() = uri;
+    }
 }

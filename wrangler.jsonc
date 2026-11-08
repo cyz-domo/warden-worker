@@ -39,7 +39,9 @@
 			"/identity/*",
 			"/sends/*",
 			"/demo.html",
-			"/admin.html"
+			"/admin.html",
+			"/admin",
+			"/admin/*"
 		]
 	}
 }
