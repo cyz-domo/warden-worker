@@ -9,6 +9,7 @@ mod durable;
 mod error;
 mod handlers;
 mod models;
+mod ratelimit;
 mod router;
 mod two_factor;
 

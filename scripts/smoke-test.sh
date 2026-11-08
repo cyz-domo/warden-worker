@@ -42,4 +42,13 @@ prefixed_status="$(curl --silent --show-error --output /dev/null --write-out '%{
   exit 1
 }
 
+prelogin_status="$(curl --silent --show-error -o /dev/null -w '%{http_code}' \
+  -X POST "$base_url/identity/accounts/prelogin" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"smoke-test@example.com"}')"
+[[ "$prelogin_status" != "429" ]] || {
+  echo "prelogin rate limited a single smoke request" >&2
+  exit 1
+}
+
 echo "Smoke test passed for $base_url"

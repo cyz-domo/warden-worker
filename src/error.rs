@@ -1,4 +1,4 @@
-use axum::http::StatusCode;
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
@@ -20,6 +20,9 @@ pub enum AppError {
 
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
+
+    #[error("Too many requests")]
+    TooManyRequests,
 
     #[error("Cryptography error: {0}")]
     Crypto(String),
@@ -45,6 +48,10 @@ impl IntoResponse for AppError {
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            AppError::TooManyRequests => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many requests, try again later".to_string(),
+            ),
             AppError::Crypto(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Crypto error: {}", msg),
@@ -61,6 +68,12 @@ impl IntoResponse for AppError {
             "error_description": error_message,
             "message": error_message
         }));
-        (status, body).into_response()
+        let mut response = (status, body).into_response();
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
+        }
+        response
     }
 }
