@@ -28,6 +28,20 @@ printf '%s' "$config" | grep -q '"identity"' || {
   exit 1
 }
 
+admin_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$base_url/admin")"
+[[ "$admin_status" == "401" || "$admin_status" == "200" ]] || {
+  echo "/admin is not served by the Worker (got $admin_status; 405 means it falls through to static assets)" >&2
+  exit 1
+}
+
+prefixed_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+  --request POST --header 'Content-Type: application/json' --data '{}' \
+  "$base_url/admin/identity/accounts/prelogin")"
+[[ "$prefixed_status" != "405" ]] || {
+  echo "POST /admin/identity/... is not reaching the Worker (405 from static assets)" >&2
+  exit 1
+}
+
 prelogin_status="$(curl --silent --show-error -o /dev/null -w '%{http_code}' \
   -X POST "$base_url/identity/accounts/prelogin" \
   -H 'Content-Type: application/json' \

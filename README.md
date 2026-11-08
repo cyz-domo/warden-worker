@@ -99,7 +99,7 @@ openssl rand -base64 48
 openssl rand -base64 32
 ```
 
-`ADMIN_EMAIL` 必须对应一个已注册用户；它不是自动创建的管理员账号。首次部署建议将 `SIGNUPS_ALLOWED=true`，先注册管理员，再访问 `https://你的域名/admin.html` 验证后台，之后按需改为 `false` 关闭注册。
+`ADMIN_EMAIL` 必须对应一个已注册用户；它不是自动创建的管理员账号。首次部署建议将 `SIGNUPS_ALLOWED=true`，先注册管理员，再访问 `https://你的域名/admin` 验证后台，之后按需改为 `false` 关闭注册。
 
 配置时机和用途：
 
@@ -128,7 +128,7 @@ wrangler deploy --config wrangler.production.jsonc
 - 禁用邮箱不会删除已有账号。
 - 删除最后一条记录后，白名单为空，注册恢复公开（前提是 `SIGNUPS_ALLOWED=true`）。
 
-管理页面：`https://你的域名/admin.html`。管理员 API 要求 `Authorization: Bearer <access_token>`，仅 Cookie 登录不能通过管理员校验。
+管理页面：`https://你的域名/admin`（与上游 Vaultwarden 把后台挂在 `/admin` 的习惯一致），`/admin.html` 仍然可用。页面本身由 Worker 路由返回，需要先用 web-vault 登录（依赖 session cookie）；管理员 API 要求 `Authorization: Bearer <access_token>`，仅 session cookie 不能通过管理员校验。
 
 ```text
 GET    /api/admin/summary
@@ -174,7 +174,7 @@ curl -f https://你的域名/api/version
 curl -f https://你的域名/api/config
 ```
 
-还应验证 `/demo.html`、`/admin.html`、新旧账号登录、refresh token、同步、文本/文件 Send、TOTP 和 Android remember-device。
+还应验证 `/demo.html`、`/admin`、`/admin.html`、新旧账号登录、refresh token、同步、文本/文件 Send、TOTP 和 Android remember-device。
 
 ### 8. GitHub Actions 自动部署
 
@@ -252,7 +252,11 @@ TWO_FACTOR_ENC_KEY=<base64-32-byte-key>
 
 ### 管理页面无法操作
 
-确认当前登录邮箱与 `ADMIN_EMAIL` 一致，并使用 `Authorization: Bearer`；仅 Cookie 登录不会通过管理 API。
+确认当前登录邮箱与 `ADMIN_EMAIL` 一致，并使用 `Authorization: Bearer`；仅 session cookie 登录不会通过管理 API。后台入口是 `/admin`（`/admin.html` 同样可用）；访问时返回 401 表示当前 session cookie 不属于 `ADMIN_EMAIL` 对应的账号。
+
+### 登录返回 405，但无痕窗口可以
+
+空 body 的 405 一般说明请求没有进入 Worker，而是被 Cloudflare 静态资源层挡掉了：客户端把带子路径的地址（例如 `https://你的域名/admin`）当作 environment base URL 记在了该站点的应用存储里，之后每个 API 请求都变成 `/admin/identity/...`。Worker 现在接管了 `/admin`，并把 `/admin/{api,identity,sends}/*` 去掉前缀后按正常路由处理，所以这类历史数据可以自愈。若仍有异常，请在该站点的 DevTools → Application 中删除对应的应用存储记录，并从根路径 `https://你的域名/` 重新打开。
 
 ## 许可证
 
@@ -261,3 +265,4 @@ MIT
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=afoim/warden-worker&type=date&legend=top-left)](https://www.star-history.com/#afoim/warden-worker&type=date&legend=top-left)
+
