@@ -30,7 +30,7 @@ Warden Worker 是一个运行在 Cloudflare Workers 上的轻量级 Bitwarden �
 - 配置与探测：`GET /api/config`、`GET /api/alive`、`GET /api/now`、`GET /api/version`
 - 登录：`POST /identity/accounts/prelogin`、`POST /identity/connect/token`
 - 同步：`GET /api/sync`
-- 密码项：`POST /api/ciphers/create`、`PUT /api/ciphers/{id}`、`PUT /api/ciphers/{id}/delete`
+- 密码项：`POST /api/ciphers/create`、`GET /api/ciphers/{id}`、`PUT /api/ciphers/{id}`、`PUT /api/ciphers/{id}/partial`、`PUT /api/ciphers/{id}/delete`
 - 文件夹：`POST /api/folders`、`PUT /api/folders/{id}`、`DELETE /api/folders/{id}`
 - 2FA：`GET /api/two-factor`、`/api/two-factor/authenticator/*`
 - 官方安卓设备探测：`GET /api/devices/knowndevice`
