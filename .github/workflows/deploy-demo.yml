@@ -26,10 +26,6 @@ jobs:
         run: cargo install worker-build@0.8.7 --locked
       - name: Verify versions
         run: ./scripts/verify-version.sh
-      - name: Build Worker
-        env:
-          RUSTFLAGS: '--cfg getrandom_backend="wasm_js"'
-        run: worker-build --release
       - name: Install Wrangler
         run: npm install --global wrangler@4.114.0
       - name: Validate Cloudflare credentials
@@ -91,7 +87,9 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           RUSTFLAGS: '--cfg getrandom_backend="wasm_js"'
-        run: wrangler deploy --config /tmp/wrangler.deploy.jsonc | tee /tmp/deploy.log
+        run: |
+          set -euo pipefail
+          wrangler deploy --config /tmp/wrangler.deploy.jsonc 2>&1 | tee /tmp/deploy.log
       - name: Sync demo Worker secrets
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
