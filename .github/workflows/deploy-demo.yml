@@ -47,8 +47,11 @@ jobs:
           curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$api?name=$DEMO_D1_NAME" > /tmp/d1-list.json
           id=$(jq -r --arg name "$DEMO_D1_NAME" '.result[]? | select(.name == $name) | .uuid' /tmp/d1-list.json | head -1)
           if [ -z "$id" ]; then
-            wrangler d1 create "$DEMO_D1_NAME" --json > /tmp/d1-create.json
-            id=$(node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync('/tmp/d1-create.json','utf8'));const row=Array.isArray(data)?data[0]:data;process.stdout.write(row.uuid||row.id||(row.result&&row.result.uuid)||'')")
+            curl -sf -X POST "$api" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data "{\"name\":\"$DEMO_D1_NAME\"}" > /tmp/d1-create.json
+            id=$(jq -r '.result.uuid // empty' /tmp/d1-create.json)
           fi
           test -n "$id" || { echo "Could not resolve demo D1 id"; exit 1; }
           {
@@ -100,7 +103,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$ADMIN_EMAIL" || { echo "Missing ADMIN_EMAIL environment variable"; exit 1; }
-          existing=$(wrangler secret list --config /tmp/wrangler.deploy.jsonc --json 2>/dev/null || echo '[]')
+          existing=$(wrangler secret list --config /tmp/wrangler.deploy.jsonc --format json 2>/dev/null || echo '[]')
           has_secret() { printf '%s' "$existing" | jq -e --arg name "$1" 'map(.name) | index($name)' > /dev/null; }
           for name in JWT_SECRET JWT_REFRESH_SECRET; do
             if has_secret "$name"; then echo "$name already configured"; else
