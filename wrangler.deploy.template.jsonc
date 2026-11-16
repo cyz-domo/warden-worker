@@ -10,6 +10,7 @@
       "migrations_dir": "sql/migrations"
     }
   ],
+  "triggers": { "crons": ["*/15 * * * *"] },
   "build": { "command": "worker-build --release" },
   "durable_objects": {
     "bindings": [

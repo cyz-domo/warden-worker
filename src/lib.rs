@@ -3,6 +3,7 @@ use tower_service::Service;
 use worker::*;
 
 mod auth;
+mod backup;
 mod crypto;
 mod db;
 mod durable;
@@ -12,6 +13,7 @@ mod models;
 mod ratelimit;
 mod router;
 mod two_factor;
+mod webdav;
 
 #[event(fetch)]
 pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<web_sys::Response> {
@@ -39,6 +41,13 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<web_sys::Resp
     let mut http_req: HttpRequest = req.try_into()?;
     rewrite_admin_prefix(&mut http_req);
     Ok(worker::response_to_wasm(app.call(http_req).await?)?)
+}
+
+#[event(scheduled)]
+pub async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
+    console_error_panic_hook::set_once();
+    let _ = console_log::init_with_level(log::Level::Info);
+    handlers::backup::run_scheduled(&std::sync::Arc::new(env)).await;
 }
 
 fn should_offload(req: &Request) -> bool {

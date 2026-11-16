@@ -89,13 +89,15 @@ wrangler secret put JWT_REFRESH_SECRET --config wrangler.production.jsonc
 wrangler secret put ADMIN_EMAIL --config wrangler.production.jsonc
 wrangler secret put SIGNUPS_ALLOWED --config wrangler.production.jsonc
 wrangler secret put TWO_FACTOR_ENC_KEY --config wrangler.production.jsonc
+wrangler secret put BACKUP_ENC_KEY --config wrangler.production.jsonc
 ```
 
-`JWT_SECRET`、`JWT_REFRESH_SECRET` 和 `TWO_FACTOR_ENC_KEY` 必须使用高强度随机值：
+`JWT_SECRET`、`JWT_REFRESH_SECRET`、`TWO_FACTOR_ENC_KEY` 和 `BACKUP_ENC_KEY` 必须使用高强度随机值：
 
 ```bash
 openssl rand -base64 48
 openssl rand -base64 48
+openssl rand -base64 32
 openssl rand -base64 32
 ```
 
@@ -110,6 +112,7 @@ openssl rand -base64 32
 | `ADMIN_EMAIL` | 首次部署前 | 管理员邮箱；对应账号需要先注册 |
 | `SIGNUPS_ALLOWED` | 首次部署前 | `true` 开放注册，`false` 关闭注册 |
 | `TWO_FACTOR_ENC_KEY` | 启用 TOTP 前 | 建议首次部署前配置，避免后续更换加密方式 |
+| `BACKUP_ENC_KEY` | 使用 WebDAV 备份前 | 32 字节 base64 密钥，加密备份文件与 WebDAV 密码；未配置时备份功能不可用 |
 | `TWO_FACTOR_REMEMBER_DAYS` | 可选 | remember-device（provider=5）记住登录的有效天数，取值 1 到 90，未设置时按 30 天，与上游 `TWO_FACTOR_REMEMBER_DAYS` 同名同义 |
 
 已有部署不需要额外的迁移步骤：Worker 会在首次使用 remember-device 时自动为 `devices` 表补上 `remember_expires_at` 列（与 `remember_token_hash` 相同的处理方式），全新安装则由 `sql/schema_full.sql` 建表时带上该列。改动之前签发的 remember token 没有记录过期时间，会被视为已过期：相关设备下一次登录需要重新输入一次 TOTP，之后按新的有效期记住。
@@ -189,7 +192,7 @@ curl -f https://你的域名/api/config
 2. 创建 API Token，并将 Account Resources 限定到目标账户。至少授予账户级 `Workers Scripts: Edit`、`D1: Edit`、`Account Settings: Read`；不要使用 Global API Key。
 3. 在 GitHub `Settings → Environments` 创建 `test`、`production`。生产环境建议设置 Required reviewers。
 4. 每个 Environment 的 **Variables** 配置：`WORKER_NAME`（默认生产 `warden-worker`、测试 `warden-worker-test`）、`D1_DATABASE_NAME`、`D1_DATABASE_ID`、`ADMIN_EMAIL`、`SIGNUPS_ALLOWED`、`BASE_URL`。
-5. 每个 Environment 的 **Secrets** 配置：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`WORKER_JWT_SECRET`、`WORKER_JWT_REFRESH_SECRET`、`WORKER_TWO_FACTOR_ENC_KEY`。
+5. 每个 Environment 的 **Secrets** 配置：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`WORKER_JWT_SECRET`、`WORKER_JWT_REFRESH_SECRET`、`WORKER_TWO_FACTOR_ENC_KEY`；如需 WebDAV 备份，再配置 `WORKER_BACKUP_ENC_KEY`（可选，未配置时部署不会失败，但备份功能保持禁用）。
 6. 第一次只对空数据库手动运行对应的 `Initialize ... D1`；workflow 会先只读检查核心表，检测到任意数据就直接退出，不执行 `sql/schema_full.sql`。该 SQL 仍可能清空表，已有数据禁止运行。
 7. 首次部署测试时，在 Actions 页面手动运行 `Deploy test` 并选择要验证的 ref；生产推送 `main` 或手动运行 `Deploy production`。
 8. 如使用自定义域，在 Worker 部署后到 Cloudflare `Workers → Settings → Domains & Routes → Add Custom Domain` 绑定，再把该 URL 写入 `BASE_URL`。
@@ -218,6 +221,18 @@ Copilot 收到任务后会分析摘要 PR，只把适用于 Cloudflare Worker �
 
 应用回归时保留已执行的 D1/DO migration，选择上一个已验证的 Git ref 手动触发生产 workflow 重新部署 Worker；不要删除 Durable Object 类或回退数据库结构。修复后再合并到 `main`。
 
+### 9.1 WebDAV 定时备份与恢复（`/admin`）
+
+配置 `BACKUP_ENC_KEY` 后，`/admin` 页面会出现「加密备份（WebDAV）」区域：
+
+- 通道支持 https WebDAV 目录、Basic 认证、每天/每周计划、UTC 偏移（默认 UTC+08:00，不处理夏令时）和保留份数（1–100）。
+- Worker 通过每 15 分钟一次的 Cron Trigger 检查到期通道，也可以在后台点「立即备份」。
+- 备份在 Worker 内导出 `users`、`folders`、`ciphers`、`sends`、`send_files`、`send_file_chunks`、`two_factor_authenticator`、`devices`、`registration_allowlist` 九张表，整体用 AES-256-GCM 加密后以 `warden-<UTC时间>-<随机>.enc` 上传；WebDAV 密码同样以该密钥加密存储。
+- 恢复会先上传 `warden-pre-restore-*.enc` 当前状态快照，再以单事务覆盖上述表；任何一步失败都会回滚。恢复后 `security_stamp` 回到备份时的值，所有现有登录会话失效，需要重新登录。
+- 限制：明文 JSON 16 MiB、总行数 20000、单文件 64 MiB。超过限制请改用 `wrangler d1 export` 在本地备份；恢复前请确认远程目录中已有完整备份。
+- `BACKUP_ENC_KEY` 丢失后无法解密旧备份或已保存的 WebDAV 密码，请备份并妥善保管该密钥，不要随意轮换。
+- 备份内含 TOTP 密钥与用户数据；跨部署恢复时需要同时使用相同的 `BACKUP_ENC_KEY` 和 `TWO_FACTOR_ENC_KEY`，否则备份无法解密或 TOTP 无法继续使用。
+
 ### 10. 本地开发
 
 ```bash
@@ -233,6 +248,7 @@ JWT_REFRESH_SECRET=local-development-refresh-secret
 SIGNUPS_ALLOWED=true
 ADMIN_EMAIL=admin@example.com
 TWO_FACTOR_ENC_KEY=<base64-32-byte-key>
+BACKUP_ENC_KEY=<base64-32-byte-key>
 ```
 
 ## 常见问题

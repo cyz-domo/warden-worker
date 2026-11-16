@@ -14,7 +14,7 @@ use crate::{
     auth::Claims,
     error::AppError,
     handlers::{
-        accounts, admin, ciphers, config, devices, folders, identity, import, sends, sync,
+        accounts, admin, backup, ciphers, config, devices, folders, identity, import, sends, sync,
         two_factor, usage,
     },
 };
@@ -95,6 +95,32 @@ pub fn api_router(env: Env) -> Router {
             "/api/admin/allowlist/{email}",
             axum::routing::patch(admin::patch_allowlist).delete(admin::delete_allowlist),
         )
+        .route(
+            "/api/admin/backup-channels",
+            get(backup::list_channels).post(backup::create_channel),
+        )
+        .route(
+            "/api/admin/backup-channels/{id}",
+            put(backup::update_channel).delete(backup::delete_channel),
+        )
+        .route(
+            "/api/admin/backup-channels/{id}/test",
+            post(backup::test_channel),
+        )
+        .route("/api/admin/backup-channels/{id}/run", post(backup::run_now))
+        .route(
+            "/api/admin/backup-channels/{id}/files",
+            get(backup::list_files),
+        )
+        .route(
+            "/api/admin/backup-channels/{id}/files/{name}",
+            delete(backup::delete_file),
+        )
+        .route(
+            "/api/admin/backup-channels/{id}/restore",
+            post(backup::restore),
+        )
+        .route("/api/admin/backup-runs", get(backup::runs))
         .route("/api/two-factor", get(two_factor::two_factor_status))
         .route(
             "/api/two-factor/get-authenticator",

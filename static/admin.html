@@ -13,6 +13,28 @@
   <div class="bar"><button onclick="loadAll()">加载数据</button><span id="msg"></span></div>
   <div class="cards"><div class="card">用户总数<div class="num" id="users">-</div></div><div class="card">已启用验证器 App<div class="num" id="totp">-</div></div><div class="card">白名单记录<div class="num" id="allowlist">-</div></div><div class="card">启用白名单<div class="num" id="enabled">-</div></div></div>
   <section><h2>注册邮箱白名单</h2><div class="bar"><input id="email" type="email" placeholder="user@example.com"><button onclick="addEmail()">添加/更新</button></div><table><thead><tr><th>邮箱</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="allowlistRows"></tbody></table></section>
+  <section><h2>加密备份（WebDAV）</h2>
+    <p class="muted" id="backupKeyHint">正在检查备份密钥…</p>
+    <div class="bar">
+      <input id="chName" placeholder="通道名称">
+      <input id="chUrl" placeholder="https://dav.example.com/path/to/warden/">
+      <input id="chUser" placeholder="用户名（可选）">
+      <input id="chPass" type="password" placeholder="密码（编辑时留空表示不修改）">
+      <select id="chCadence"><option value="off">不自动备份</option><option value="daily">每天</option><option value="weekly">每周</option></select>
+      <input id="chTime" type="time" value="03:00">
+      <select id="chWeekday"><option value="0">周日</option><option value="1" selected>周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option></select>
+      <input id="chOffset" type="number" value="480" min="-720" max="840" title="UTC 偏移（分钟）" placeholder="UTC 偏移分钟">
+      <input id="chKeep" type="number" value="7" min="1" max="100" title="保留份数" placeholder="保留份数">
+      <label class="muted"><input id="chEnabled" type="checkbox" checked> 启用</label>
+      <button onclick="saveChannel()">保存通道</button>
+      <button class="secondary" onclick="resetChannelForm()">清空表单</button>
+    </div>
+    <p class="muted">备份文件在 Worker 内加密后上传；恢复前会自动上传一份当前状态快照。计划时间按 UTC 偏移计算，不处理夏令时。</p>
+    <table><thead><tr><th>名称</th><th>WebDAV</th><th>计划</th><th>保留</th><th>上次运行</th><th>状态</th><th>操作</th></tr></thead><tbody id="channelRows"></tbody></table>
+    <div class="bar"><button class="secondary" onclick="loadRuns()">刷新运行记录</button><span id="backupMsg"></span></div>
+    <table><thead><tr><th>开始时间</th><th>通道</th><th>触发</th><th>状态</th><th>文件</th><th>错误</th></tr></thead><tbody id="runRows"></tbody></table>
+  </section>
+  <section id="filesSection" hidden><h2>远程备份文件：<span id="filesChannel"></span></h2><table><thead><tr><th>文件</th><th>操作</th></tr></thead><tbody id="fileRows"></tbody></table></section>
   <section><h2>用户</h2><table><thead><tr><th>邮箱</th><th>名称</th><th>注册时间</th><th>验证器 App</th></tr></thead><tbody id="userRows"></tbody></table></section>
   <script>
     const $ = id => document.getElementById(id);
@@ -38,7 +60,130 @@
       const body = $('userRows'); body.replaceChildren();
       for (const item of items) { const row = document.createElement('tr'); cell(row, item.email); cell(row, item.name); cell(row, item.created_at); cell(row, item.two_factor_enabled ? '已启用' : '未启用'); body.appendChild(row); }
     }
-    async function loadAll() { try { const [summary, allowlist, users] = await Promise.all([api('/api/admin/summary'), api('/api/admin/allowlist'), api('/api/admin/users')]); $('users').textContent = summary.users; $('totp').textContent = summary.totpEnabled; $('allowlist').textContent = summary.allowlist; $('enabled').textContent = summary.allowlistEnabled; renderAllowlist(allowlist.data || []); renderUsers(users.data || []); message('加载成功', true); } catch (error) { message(error.message); } }
+    let editingChannelId = null;
+    let channelsById = new Map();
+    let filesChannelId = null;
+    function ts(value) { return value ? new Date(Number(value) * 1000).toLocaleString() : '-'; }
+    function utcLabel(minutes) { const sign = minutes >= 0 ? '+' : '-'; const absolute = Math.abs(minutes); return `UTC${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}:${String(absolute % 60).padStart(2, '0')}`; }
+    function backupMessage(text, ok = false) { $('backupMsg').textContent = text; $('backupMsg').className = ok ? 'ok' : 'error'; }
+    function scheduleText(channel) {
+      if (!channel.enabled || channel.cadence === 'off') return '不自动';
+      if (channel.cadence === 'daily') return `每天 ${channel.time} (${utcLabel(channel.utcOffsetMinutes)})`;
+      return `每周${['日', '一', '二', '三', '四', '五', '六'][channel.weekday] || '一'} ${channel.time} (${utcLabel(channel.utcOffsetMinutes)})`;
+    }
+    function renderChannels(items, encryptionReady) {
+      channelsById = new Map(items.map(item => [item.id, item]));
+      const hint = $('backupKeyHint');
+      hint.textContent = encryptionReady
+        ? 'BACKUP_ENC_KEY 已配置，备份文件与 WebDAV 密码均加密存储。'
+        : '未配置 BACKUP_ENC_KEY：保存 WebDAV 密码和运行备份会失败。请先执行 wrangler secret put BACKUP_ENC_KEY 并填入 openssl rand -base64 32 的输出。';
+      hint.className = encryptionReady ? 'muted' : 'error';
+      const body = $('channelRows'); body.replaceChildren();
+      if (!items.length) { const row = document.createElement('tr'); const empty = cell(row, '暂无备份通道'); empty.colSpan = 7; body.appendChild(row); return; }
+      for (const channel of items) {
+        const row = document.createElement('tr');
+        cell(row, channel.name); cell(row, channel.url); cell(row, scheduleText(channel)); cell(row, channel.keepCount); cell(row, ts(channel.lastRunAt));
+        const status = cell(row, channel.lastStatus === 'success' ? '成功' : channel.lastStatus === 'error' ? '失败' : '尚未运行');
+        if (channel.lastError) status.title = channel.lastError;
+        const actions = document.createElement('td');
+        actions.append(
+          button('测试', 'secondary', () => testChannel(channel.id)), document.createTextNode(' '),
+          button('立即备份', 'secondary', () => runChannel(channel)), document.createTextNode(' '),
+          button('文件', 'secondary', () => loadFiles(channel.id, channel.name)), document.createTextNode(' '),
+          button('编辑', 'secondary', () => editChannel(channel)), document.createTextNode(' '),
+          button('删除', 'danger', () => removeChannel(channel))
+        );
+        row.appendChild(actions); body.appendChild(row);
+      }
+    }
+    function renderRuns(items) {
+      const body = $('runRows'); body.replaceChildren();
+      if (!items.length) { const row = document.createElement('tr'); const empty = cell(row, '暂无运行记录'); empty.colSpan = 6; body.appendChild(row); return; }
+      for (const run of items) {
+        const row = document.createElement('tr');
+        cell(row, ts(run.started_at));
+        cell(row, channelsById.get(run.channel_id)?.name || run.channel_id);
+        cell(row, run.trigger === 'scheduled' ? '定时' : run.trigger === 'restore' ? '恢复' : '手动');
+        cell(row, run.status === 'success' ? '成功' : run.status === 'running' ? '进行中' : '失败');
+        cell(row, run.file_name || '');
+        const error = cell(row, run.error || ''); error.className = 'error';
+        body.appendChild(row);
+      }
+    }
+    async function loadBackup() {
+      try {
+        const [list, runs] = await Promise.all([api('/api/admin/backup-channels'), api('/api/admin/backup-runs')]);
+        renderChannels(list.data || [], !!list.encryptionReady);
+        renderRuns(runs.data || []);
+      } catch (error) { $('backupKeyHint').textContent = error.message; $('backupKeyHint').className = 'error'; }
+    }
+    async function loadRuns() { try { const data = await api('/api/admin/backup-runs'); renderRuns(data.data || []); backupMessage('运行记录已刷新', true); } catch (error) { backupMessage(error.message); } }
+    function resetChannelForm() {
+      editingChannelId = null;
+      for (const id of ['chName', 'chUrl', 'chUser', 'chPass']) $(id).value = '';
+      $('chCadence').value = 'daily'; $('chTime').value = '03:00'; $('chWeekday').value = '1'; $('chOffset').value = '480'; $('chKeep').value = '7'; $('chEnabled').checked = true;
+    }
+    function editChannel(channel) {
+      editingChannelId = channel.id;
+      $('chName').value = channel.name; $('chUrl').value = channel.url; $('chUser').value = channel.username || ''; $('chPass').value = '';
+      $('chCadence').value = channel.cadence; $('chTime').value = channel.time || '03:00'; $('chWeekday').value = String(channel.weekday ?? 1);
+      $('chOffset').value = String(channel.utcOffsetMinutes ?? 480); $('chKeep').value = String(channel.keepCount ?? 7); $('chEnabled').checked = !!channel.enabled;
+      $('chName').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    async function saveChannel() {
+      const id = editingChannelId;
+      const payload = { name: $('chName').value.trim(), url: $('chUrl').value.trim(), username: $('chUser').value.trim(), enabled: $('chEnabled').checked,
+        cadence: $('chCadence').value, time: $('chTime').value, weekday: Number($('chWeekday').value), utcOffsetMinutes: Number($('chOffset').value), keepCount: Number($('chKeep').value) };
+      const password = $('chPass').value; if (password) payload.password = password;
+      try {
+        await api(id ? `/api/admin/backup-channels/${encodeURIComponent(id)}` : '/api/admin/backup-channels', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+        resetChannelForm(); backupMessage('备份通道已保存', true); await loadBackup();
+      } catch (error) { backupMessage(error.message); }
+    }
+    async function testChannel(id) { backupMessage('正在测试连接…'); try { await api(`/api/admin/backup-channels/${encodeURIComponent(id)}/test`, { method: 'POST' }); backupMessage('WebDAV 连接正常', true); } catch (error) { backupMessage(error.message); } }
+    async function runChannel(channel) {
+      backupMessage('正在导出并上传加密备份…');
+      try {
+        const result = await api(`/api/admin/backup-channels/${encodeURIComponent(channel.id)}/run`, { method: 'POST' });
+        backupMessage(`备份完成：${result.file}（${Math.round(Number(result.size) / 1024)} KiB）`, true);
+        await loadBackup();
+      } catch (error) { backupMessage(error.message); await loadBackup(); }
+    }
+    async function removeChannel(channel) {
+      if (!confirm(`确认删除备份通道“${channel.name}”？远程文件不会删除。`)) return;
+      try { await api(`/api/admin/backup-channels/${encodeURIComponent(channel.id)}`, { method: 'DELETE' }); if (filesChannelId === channel.id) $('filesSection').hidden = true; backupMessage('通道已删除', true); await loadBackup(); } catch (error) { backupMessage(error.message); }
+    }
+    async function loadFiles(id, name) {
+      try {
+        const data = await api(`/api/admin/backup-channels/${encodeURIComponent(id)}/files`);
+        filesChannelId = id; $('filesChannel').textContent = name; $('filesSection').hidden = false;
+        const body = $('fileRows'); body.replaceChildren();
+        const files = data.data || [];
+        if (!files.length) { const row = document.createElement('tr'); const empty = cell(row, '目录中没有备份文件'); empty.colSpan = 2; body.appendChild(row); return; }
+        for (const file of files) {
+          const row = document.createElement('tr'); cell(row, file.name);
+          const actions = document.createElement('td');
+          actions.append(button('恢复', 'danger', () => restoreFile(id, file.name)), document.createTextNode(' '), button('删除', 'secondary', () => deleteFile(id, file.name)));
+          row.appendChild(actions); body.appendChild(row);
+        }
+        $('filesSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (error) { backupMessage(error.message); }
+    }
+    async function restoreFile(id, name) {
+      if (!confirm(`恢复“${name}”会覆盖当前全部用户、密码项和设置，并先上传一份当前状态快照。继续？`)) return;
+      if (!confirm('二次确认：现在执行恢复？恢复后当前登录会话可能失效。')) return;
+      backupMessage('正在恢复，请勿关闭页面…');
+      try {
+        const result = await api(`/api/admin/backup-channels/${encodeURIComponent(id)}/restore`, { method: 'POST', body: JSON.stringify({ file: name, confirm: true }) });
+        const counts = Object.entries(result.restored || {}).map(([table, count]) => `${table}: ${count}`).join('，');
+        backupMessage(`恢复完成（${counts}）。请重新登录。`, true);
+      } catch (error) { backupMessage(error.message); }
+    }
+    async function deleteFile(id, name) {
+      if (!confirm(`确认删除远程文件“${name}”？`)) return;
+      try { await api(`/api/admin/backup-channels/${encodeURIComponent(id)}/files/${encodeURIComponent(name)}`, { method: 'DELETE' }); backupMessage('远程文件已删除', true); await loadFiles(id, $('filesChannel').textContent); } catch (error) { backupMessage(error.message); }
+    }
+    async function loadAll() { try { const [summary, allowlist, users] = await Promise.all([api('/api/admin/summary'), api('/api/admin/allowlist'), api('/api/admin/users')]); $('users').textContent = summary.users; $('totp').textContent = summary.totpEnabled; $('allowlist').textContent = summary.allowlist; $('enabled').textContent = summary.allowlistEnabled; renderAllowlist(allowlist.data || []); renderUsers(users.data || []); await loadBackup(); message('加载成功', true); } catch (error) { message(error.message); } }
     async function addEmail() { try { await api('/api/admin/allowlist', { method: 'POST', body: JSON.stringify({ email: $('email').value, enabled: true }) }); $('email').value = ''; await loadAll(); } catch (error) { message(error.message); } }
     async function toggle(email, enabled) { try { await api(`/api/admin/allowlist/${encodeURIComponent(email)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }); await loadAll(); } catch (error) { message(error.message); } }
     async function removeEmail(email) { if (!confirm('确认删除该邮箱？')) return; try { await api(`/api/admin/allowlist/${encodeURIComponent(email)}`, { method: 'DELETE' }); await loadAll(); } catch (error) { message(error.message); } }
