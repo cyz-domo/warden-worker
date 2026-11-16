@@ -1,0 +1,166 @@
+# Vaultwarden 上游变更摘要（2026-11-15）
+
+- 上游仓库：[dani-garcia/vaultwarden](https://github.com/dani-garcia/vaultwarden)
+- 对比区间：`17b159beff` → `4051a4d3a6`（[查看完整 compare](https://github.com/dani-garcia/vaultwarden/compare/17b159beff4b892f07f61f38ce2fe452e55251c1...4051a4d3a64d8d9f6e019c8c1646fbed54384d15)）
+- 提交数：16；变更文件数：71
+- 生成时间：2026-11-16 09:33 UTC
+
+> 本 PR 仅为变更摘要，不包含代码改动。请评估后只移植适用于本 Cloudflare Worker（D1 + Durable Objects）实现的协议/API/安全相关改动，并保留 KDF、Send、2FA、白名单及部署逻辑。
+
+## 提交列表
+
+- [`5ad0c6d4`](https://github.com/dani-garcia/vaultwarden/commit/5ad0c6d41acc703863e30f237dfc7626bb81616d) Support blob-encrypted ciphers and match upstream's key id checks (#7764)
+- [`d28c8339`](https://github.com/dani-garcia/vaultwarden/commit/d28c8339fb81302fcca4130fb28f607581ac0d50) Implement V2 registration support (#7765)
+- [`7c82fbed`](https://github.com/dani-garcia/vaultwarden/commit/7c82fbed0c13817f9eba9243bbd6509118dbfa9f) Implement V2 key rotation support (#7766)
+- [`1430a645`](https://github.com/dani-garcia/vaultwarden/commit/1430a645471cd896895539dd4dfc689faff1e276) [PR 2] Add administrative cipher access for Custom Roles (#7938)
+- [`730048e3`](https://github.com/dani-garcia/vaultwarden/commit/730048e3c66bc82ecd4034491ec21b7b0380ce7a) Move the cipher content mapping into its own function (#7952)
+- [`d2d12940`](https://github.com/dani-garcia/vaultwarden/commit/d2d1294098e8eb371992327fb00f7b6edf3db63f) Run the Bitwarden SDK's live end-to-end tests against Vaultwarden (#7953)
+- [`a8de8c78`](https://github.com/dani-garcia/vaultwarden/commit/a8de8c78200ef0b78e28679da1f2da18a16d586e) [PR 3] Add collection permissions for Custom Roles (#7951)
+- [`258b7f02`](https://github.com/dani-garcia/vaultwarden/commit/258b7f0254c2f3fb0fe2f0a53860045814d6483b) Add macOS native credential sync to supported feature flags (#7942)
+- [`df1e918c`](https://github.com/dani-garcia/vaultwarden/commit/df1e918c79b3bfcbd85b659819f1d1d6b1bcd009) Define threat model (#7957)
+- [`644ddfa0`](https://github.com/dani-garcia/vaultwarden/commit/644ddfa0007d6be0f99faed43267169042762c51) Speed up the Build workflow (#7961)
+- [`e03151d3`](https://github.com/dani-garcia/vaultwarden/commit/e03151d307b323a81ee0387f7da0c50cc3e1f713) [PR 4] Add Manage Users permission for Custom Roles (#7960)
+- [`81ec0966`](https://github.com/dani-garcia/vaultwarden/commit/81ec0966cb96065d19ab0e89db026b25e98879b8) Add Custom Roles group and policy permissions (#7962)
+- [`bd7beab7`](https://github.com/dani-garcia/vaultwarden/commit/bd7beab76e42c3e9605f1c9b96814ee97f70e376) V2 Encryption followups (#7963)
+- [`b0048fa2`](https://github.com/dani-garcia/vaultwarden/commit/b0048fa27ff28ae498babf09a5e387dda0df476a) [PR 6] Add organization data access permissions for Custom Roles (#7964)
+- [`00611ea8`](https://github.com/dani-garcia/vaultwarden/commit/00611ea80d4b2e1ea5afa76c6dd6fc7290068195) Add Custom Roles account recovery permission (#7965)
+- [`4051a4d3`](https://github.com/dani-garcia/vaultwarden/commit/4051a4d3a64d8d9f6e019c8c1646fbed54384d15) Align policy enforcement and status codes with Bitwarden (#7970)
+
+## 变更文件（前 200 个）
+
+- modified `.env.template` (+4/-0)
+- modified `.github/CODEOWNERS` (+1/-0)
+- modified `.github/workflows/build.yml` (+27/-16)
+- added `.github/workflows/sdk-live-tests.yml` (+166/-0)
+- modified `.typos.toml` (+2/-3)
+- modified `Cargo.lock` (+1/-0)
+- modified `Cargo.toml` (+5/-1)
+- modified `SECURITY.md` (+24/-35)
+- added `THREAT_MODEL.md` (+148/-0)
+- added `migrations/mysql/2026-10-08-120000_cipher_data_longtext/down.sql` (+0/-0)
+- added `migrations/mysql/2026-10-08-120000_cipher_data_longtext/up.sql` (+3/-0)
+- added `migrations/mysql/2026-10-09-120000_user_crypto_v2/down.sql` (+5/-0)
+- added `migrations/mysql/2026-10-09-120000_user_crypto_v2/up.sql` (+14/-0)
+- added `migrations/mysql/2026-11-02-120000_reset_user_key_id/down.sql` (+0/-0)
+- added `migrations/mysql/2026-11-02-120000_reset_user_key_id/up.sql` (+4/-0)
+- added `migrations/mysql/2026-11-04-120000_add_v2_upgrade_token/down.sql` (+2/-0)
+- added `migrations/mysql/2026-11-04-120000_add_v2_upgrade_token/up.sql` (+2/-0)
+- added `migrations/mysql/2026-11-14-120000_add_custom_role_manage_reset_password/down.sql` (+13/-0)
+- added `migrations/mysql/2026-11-14-120000_add_custom_role_manage_reset_password/up.sql` (+3/-0)
+- added `migrations/postgresql/2026-10-08-120000_cipher_data_longtext/down.sql` (+0/-0)
+- added `migrations/postgresql/2026-10-08-120000_cipher_data_longtext/up.sql` (+3/-0)
+- added `migrations/postgresql/2026-10-09-120000_user_crypto_v2/down.sql` (+5/-0)
+- added `migrations/postgresql/2026-10-09-120000_user_crypto_v2/up.sql` (+13/-0)
+- added `migrations/postgresql/2026-11-02-120000_reset_user_key_id/down.sql` (+0/-0)
+- added `migrations/postgresql/2026-11-02-120000_reset_user_key_id/up.sql` (+4/-0)
+- added `migrations/postgresql/2026-11-04-120000_add_v2_upgrade_token/down.sql` (+2/-0)
+- added `migrations/postgresql/2026-11-04-120000_add_v2_upgrade_token/up.sql` (+2/-0)
+- added `migrations/postgresql/2026-11-14-120000_add_custom_role_manage_reset_password/down.sql` (+11/-0)
+- added `migrations/postgresql/2026-11-14-120000_add_custom_role_manage_reset_password/up.sql` (+3/-0)
+- added `migrations/sqlite/2026-10-08-120000_cipher_data_longtext/down.sql` (+0/-0)
+- added `migrations/sqlite/2026-10-08-120000_cipher_data_longtext/up.sql` (+1/-0)
+- added `migrations/sqlite/2026-10-09-120000_user_crypto_v2/down.sql` (+5/-0)
+- added `migrations/sqlite/2026-10-09-120000_user_crypto_v2/up.sql` (+13/-0)
+- added `migrations/sqlite/2026-11-02-120000_reset_user_key_id/down.sql` (+0/-0)
+- added `migrations/sqlite/2026-11-02-120000_reset_user_key_id/up.sql` (+4/-0)
+- added `migrations/sqlite/2026-11-04-120000_add_v2_upgrade_token/down.sql` (+2/-0)
+- added `migrations/sqlite/2026-11-04-120000_add_v2_upgrade_token/up.sql` (+2/-0)
+- added `migrations/sqlite/2026-11-14-120000_add_custom_role_manage_reset_password/down.sql` (+11/-0)
+- added `migrations/sqlite/2026-11-14-120000_add_custom_role_manage_reset_password/up.sql` (+3/-0)
+- modified `src/api/admin.rs` (+6/-4)
+- modified `src/api/core/accounts.rs` (+973/-174)
+- modified `src/api/core/ciphers.rs` (+950/-316)
+- modified `src/api/core/emergency_access.rs` (+44/-2)
+- modified `src/api/core/events.rs` (+24/-7)
+- modified `src/api/core/mod.rs` (+2/-0)
+- modified `src/api/core/organizations.rs` (+1169/-247)
+- modified `src/api/core/sends.rs` (+17/-0)
+- modified `src/api/core/two_factor/mod.rs` (+16/-7)
+- modified `src/api/identity.rs` (+135/-37)
+- modified `src/api/mod.rs` (+6/-1)
+- modified `src/api/notifications.rs` (+26/-6)
+- modified `src/api/push.rs` (+6/-5)
+- added `src/api/test_seeder.rs` (+511/-0)
+- modified `src/auth.rs` (+231/-85)
+- modified `src/config.rs` (+3/-0)
+- modified `src/db/mod.rs` (+223/-4)
+- modified `src/db/models/attachment.rs` (+21/-4)
+- modified `src/db/models/cipher.rs` (+274/-80)
+- modified `src/db/models/collection.rs` (+42/-10)
+- modified `src/db/models/event.rs` (+2/-0)
+- modified `src/db/models/mod.rs` (+6/-2)
+- modified `src/db/models/org_policy.rs` (+13/-5)
+- modified `src/db/models/organization.rs` (+440/-124)
+- modified `src/db/models/user.rs` (+201/-27)
+- added `src/db/models/user_signature_key_pair.rs` (+132/-0)
+- modified `src/db/schema.rs` (+20/-0)
+- modified `src/main.rs` (+11/-1)
+- modified `src/static/templates/scss/vaultwarden.scss.hbs` (+2/-2)
+- modified `src/util.rs` (+42/-0)
+- added `tools/sdk-live-tests/run.sh` (+145/-0)
+- added `tools/sdk-live-tests/seed_vector.py` (+60/-0)
+
+## 可能影响协议/客户端兼容性的文件
+
+- `migrations/mysql/2026-10-08-120000_cipher_data_longtext/down.sql`
+- `migrations/mysql/2026-10-08-120000_cipher_data_longtext/up.sql`
+- `migrations/mysql/2026-10-09-120000_user_crypto_v2/down.sql`
+- `migrations/mysql/2026-10-09-120000_user_crypto_v2/up.sql`
+- `migrations/mysql/2026-11-02-120000_reset_user_key_id/down.sql`
+- `migrations/mysql/2026-11-02-120000_reset_user_key_id/up.sql`
+- `migrations/mysql/2026-11-04-120000_add_v2_upgrade_token/down.sql`
+- `migrations/mysql/2026-11-04-120000_add_v2_upgrade_token/up.sql`
+- `migrations/mysql/2026-11-14-120000_add_custom_role_manage_reset_password/down.sql`
+- `migrations/mysql/2026-11-14-120000_add_custom_role_manage_reset_password/up.sql`
+- `migrations/postgresql/2026-10-08-120000_cipher_data_longtext/down.sql`
+- `migrations/postgresql/2026-10-08-120000_cipher_data_longtext/up.sql`
+- `migrations/postgresql/2026-10-09-120000_user_crypto_v2/down.sql`
+- `migrations/postgresql/2026-10-09-120000_user_crypto_v2/up.sql`
+- `migrations/postgresql/2026-11-02-120000_reset_user_key_id/down.sql`
+- `migrations/postgresql/2026-11-02-120000_reset_user_key_id/up.sql`
+- `migrations/postgresql/2026-11-04-120000_add_v2_upgrade_token/down.sql`
+- `migrations/postgresql/2026-11-04-120000_add_v2_upgrade_token/up.sql`
+- `migrations/postgresql/2026-11-14-120000_add_custom_role_manage_reset_password/down.sql`
+- `migrations/postgresql/2026-11-14-120000_add_custom_role_manage_reset_password/up.sql`
+- `migrations/sqlite/2026-10-08-120000_cipher_data_longtext/down.sql`
+- `migrations/sqlite/2026-10-08-120000_cipher_data_longtext/up.sql`
+- `migrations/sqlite/2026-10-09-120000_user_crypto_v2/down.sql`
+- `migrations/sqlite/2026-10-09-120000_user_crypto_v2/up.sql`
+- `migrations/sqlite/2026-11-02-120000_reset_user_key_id/down.sql`
+- `migrations/sqlite/2026-11-02-120000_reset_user_key_id/up.sql`
+- `migrations/sqlite/2026-11-04-120000_add_v2_upgrade_token/down.sql`
+- `migrations/sqlite/2026-11-04-120000_add_v2_upgrade_token/up.sql`
+- `migrations/sqlite/2026-11-14-120000_add_custom_role_manage_reset_password/down.sql`
+- `migrations/sqlite/2026-11-14-120000_add_custom_role_manage_reset_password/up.sql`
+- `src/api/admin.rs`
+- `src/api/core/accounts.rs`
+- `src/api/core/ciphers.rs`
+- `src/api/core/emergency_access.rs`
+- `src/api/core/events.rs`
+- `src/api/core/mod.rs`
+- `src/api/core/organizations.rs`
+- `src/api/core/sends.rs`
+- `src/api/core/two_factor/mod.rs`
+- `src/api/identity.rs`
+- `src/api/mod.rs`
+- `src/api/notifications.rs`
+- `src/api/push.rs`
+- `src/api/test_seeder.rs`
+- `src/db/mod.rs`
+- `src/db/models/attachment.rs`
+- `src/db/models/cipher.rs`
+- `src/db/models/collection.rs`
+- `src/db/models/event.rs`
+- `src/db/models/mod.rs`
+- `src/db/models/org_policy.rs`
+- `src/db/models/organization.rs`
+- `src/db/models/user.rs`
+- `src/db/models/user_signature_key_pair.rs`
+- `src/db/schema.rs`
+
+## 建议动作
+
+- [ ] 对照上面的文件评估是否影响 Bitwarden 协议/客户端兼容性
+- [ ] 需要时新增 D1 增量 migration（`migrations/`）
+- [ ] 验证 `cargo fmt -- --check`、`cargo check` 和 WASM worker 构建
+- [ ] 如需跟进，另开独立 PR 只移植兼容改动，不直接合并上游
