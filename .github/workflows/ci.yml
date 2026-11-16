@@ -30,7 +30,7 @@ jobs:
       - name: Verify versions
         run: ./scripts/verify-version.sh
       - name: Install worker-build
-        run: cargo install worker-build@0.8.5 --locked
+        run: cargo install worker-build@0.8.7 --locked
       - name: Build Worker
         env:
           RUSTFLAGS: '--cfg getrandom_backend="wasm_js"'
