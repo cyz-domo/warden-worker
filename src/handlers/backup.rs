@@ -19,8 +19,9 @@ use worker::{D1Database, Env};
 
 use crate::auth::Claims;
 use crate::backup::{
-    backup_key, decrypt_backup, encrypt_backup, encryption_ready, ensure_tables, export_payload,
-    next_run_after, now_secs, parse_payload, parse_time, restore_payload, serialize_payload,
+    backup_key, clear_two_factor_state, decrypt_backup, encrypt_backup, encryption_ready,
+    ensure_tables, export_payload, next_run_after, now_secs, parse_payload, parse_time,
+    restore_payload, serialize_payload,
 };
 use crate::db;
 use crate::error::AppError;
@@ -844,6 +845,8 @@ pub async fn delete_file(
 pub struct RestoreRequest {
     pub file: String,
     pub confirm: bool,
+    #[serde(default, rename = "clearTwoFactor")]
+    pub clear_two_factor: bool,
 }
 
 #[worker::send]
@@ -876,6 +879,7 @@ pub async fn restore(
 
     let started = now_secs();
     let run_id = record_run_start(&db, &channel.id, "restore", started).await?;
+    let clear_two_factor = input.clear_two_factor;
     let outcome = async {
         // Keep a snapshot of the current state before replacing anything.
         create_snapshot(&env, &client, "warden-pre-restore").await?;
@@ -885,6 +889,9 @@ pub async fn restore(
         let payload = decrypt_backup(&key, &envelope)?;
         let tables = parse_payload(&payload)?;
         let counts = restore_payload(&db, &tables).await?;
+        if clear_two_factor {
+            clear_two_factor_state(&db).await?;
+        }
         Ok::<Vec<(String, usize)>, AppError>(counts)
     }
     .await;
@@ -905,7 +912,10 @@ pub async fn restore(
                 log::warn!("Could not record restore result: {error}");
             }
             let restored: HashMap<String, usize> = counts.into_iter().collect();
-            Ok(Json(json!({"restored": restored})))
+            Ok(Json(json!({
+                "restored": restored,
+                "twoFactorCleared": clear_two_factor
+            })))
         }
         Err(error) => {
             if let Err(record_error) = record_run_finish(
@@ -943,6 +953,13 @@ fn import_file_name(name: Option<&String>) -> String {
     }
 }
 
+fn query_flag(query: &HashMap<String, String>, name: &str) -> bool {
+    matches!(
+        query.get(name).map(String::as_str),
+        Some("1" | "true" | "yes")
+    )
+}
+
 #[worker::send]
 pub async fn import_backup(
     claims: Claims,
@@ -964,6 +981,7 @@ pub async fn import_backup(
         )));
     }
     let file_name = import_file_name(query.get("name"));
+    let clear_two_factor = query_flag(&query, "clearTwoFactor");
     let db = db::get_db(&env)?;
     ensure_tables(&db).await?;
     let key = backup_key(&env)?;
@@ -975,7 +993,11 @@ pub async fn import_backup(
             .map_err(|_| AppError::BadRequest("This file is not a Warden backup.".to_string()))?;
         let payload = decrypt_backup(&key, &envelope)?;
         let tables = parse_payload(&payload)?;
-        restore_payload(&db, &tables).await
+        let counts = restore_payload(&db, &tables).await?;
+        if clear_two_factor {
+            clear_two_factor_state(&db).await?;
+        }
+        Ok::<Vec<(String, usize)>, AppError>(counts)
     }
     .await;
 
@@ -995,7 +1017,10 @@ pub async fn import_backup(
                 log::warn!("Could not record import result: {error}");
             }
             let restored: HashMap<String, usize> = counts.into_iter().collect();
-            Ok(Json(json!({"restored": restored})))
+            Ok(Json(json!({
+                "restored": restored,
+                "twoFactorCleared": clear_two_factor
+            })))
         }
         Err(error) => {
             if let Err(record_error) = record_run_finish(

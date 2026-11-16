@@ -601,6 +601,30 @@ pub async fn restore_payload(
     Ok(counts)
 }
 
+/// Restored TOTP secrets only decrypt with the original TWO_FACTOR_ENC_KEY, so a
+/// restore from another deployment can leave every account unable to pass 2FA.
+pub async fn clear_two_factor_state(db: &D1Database) -> Result<(), AppError> {
+    let _ = db
+        .prepare("ALTER TABLE devices ADD COLUMN remember_token_hash TEXT")
+        .run()
+        .await;
+    let _ = db
+        .prepare("ALTER TABLE devices ADD COLUMN remember_expires_at TEXT")
+        .run()
+        .await;
+    db.batch(vec![
+        db.prepare("DELETE FROM two_factor_authenticator"),
+        db.prepare("UPDATE users SET totp_recover = NULL"),
+        db.prepare("UPDATE devices SET remember_token_hash = NULL, remember_expires_at = NULL"),
+    ])
+    .await
+    .map_err(|error| {
+        log::error!("Could not clear restored two-factor state: {error}");
+        AppError::Database
+    })?;
+    Ok(())
+}
+
 pub fn parse_time(value: &str) -> Result<(i64, i64), AppError> {
     let (hour, minute) = value
         .split_once(':')

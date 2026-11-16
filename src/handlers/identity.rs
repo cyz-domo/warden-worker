@@ -537,17 +537,44 @@ pub async fn token(
                         return Ok(two_factor_required_response());
                     };
 
-                    let secret_enc = two_factor::get_authenticator_secret_enc(&db, &user.id)
-                        .await?
-                        .ok_or_else(|| AppError::Internal)?;
+                    let Some(secret_enc) =
+                        two_factor::get_authenticator_secret_enc(&db, &user.id).await?
+                    else {
+                        log::error!(
+                            "Authenticator secret missing for user {} during 2FA login",
+                            user.id
+                        );
+                        return Ok(invalid_two_factor_response());
+                    };
                     let two_factor_key_b64 =
                         env.secret("TWO_FACTOR_ENC_KEY").ok().map(|s| s.to_string());
-                    let secret_encoded = two_factor::decrypt_secret_with_optional_key(
+                    let secret_encoded = match two_factor::decrypt_secret_with_optional_key(
                         two_factor_key_b64.as_deref(),
                         &user.id,
                         &secret_enc,
-                    )?;
-                    if !two_factor::verify_totp_code(&secret_encoded, token)? {
+                    ) {
+                        Ok(secret) => secret,
+                        Err(error) => {
+                            // Clients only render a usable error for a 400 carrying
+                            // TwoFactorProviders, so map crypto failures onto that shape.
+                            log::error!(
+                                "Authenticator secret cannot be decrypted for user {}: {error}",
+                                user.id
+                            );
+                            return Ok(invalid_two_factor_response());
+                        }
+                    };
+                    let verified = match two_factor::verify_totp_code(&secret_encoded, token) {
+                        Ok(verified) => verified,
+                        Err(error) => {
+                            log::error!(
+                                "Authenticator code verification failed for user {}: {error}",
+                                user.id
+                            );
+                            return Ok(invalid_two_factor_response());
+                        }
+                    };
+                    if !verified {
                         return Ok(invalid_two_factor_response());
                     }
 
