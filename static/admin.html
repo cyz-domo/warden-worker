@@ -46,6 +46,7 @@
     .ok{color:var(--ok)}
     .error{color:var(--err);white-space:pre-wrap}
     .hint{font-size:13px;color:var(--muted);margin:10px 0 0}
+    .notice{border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;background:#f8fafc}
     .drop{border:2px dashed #cbd5e1;border-radius:12px;padding:22px;background:#fff;display:flex;flex-direction:column;gap:10px}
     .drop strong{font-size:15px}
     .drop .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -123,6 +124,13 @@
 
       <section class="view" id="view-restore">
         <div class="stack">
+          <div class="notice">
+            <label style="display:flex;align-items:center;gap:8px">
+              <input id="clearTwoFactor" type="checkbox">
+              恢复后清除所有账户的二步验证（App 验证码）
+            </label>
+            <p class="muted" style="margin:6px 0 0">二步验证密钥用 <code>TWO_FACTOR_ENC_KEY</code> 单独加密：如果备份来自另一个部署且密钥不同，导入后 App 验证码无法通过。勾选后各账户用密码登录，再重新绑定，同时撤销记住设备。</p>
+          </div>
           <div class="drop">
             <strong>导入离线备份包（.enc）</strong>
             <p class="muted" style="margin:0">直接选择本地的 <code>warden-*.enc</code> 文件恢复数据。文件必须由使用同一个 <code>BACKUP_ENC_KEY</code> 的部署生成；恢复会覆盖全部用户、密码项和设置，且不会自动上传快照。</p>
@@ -294,9 +302,11 @@
       if (!confirm('二次确认：现在执行恢复？恢复后当前登录会话可能失效。')) return;
       message('正在恢复，请勿关闭页面…');
       try {
-        const result = await api(`/api/admin/backup-channels/${encodeURIComponent(id)}/restore`, { method: 'POST', body: JSON.stringify({ file: name, confirm: true }) });
+        const clearTwoFactor = $('clearTwoFactor').checked;
+        const result = await api(`/api/admin/backup-channels/${encodeURIComponent(id)}/restore`, { method: 'POST', body: JSON.stringify({ file: name, confirm: true, clearTwoFactor }) });
         const counts = Object.entries(result.restored || {}).map(([table, count]) => `${table}: ${count}`).join('，');
-        message(`恢复完成（${counts}）。请重新登录。`, true);
+        const suffix = result.twoFactorCleared ? '已清除二步验证，请用密码登录后重新绑定。' : '请重新登录。';
+        message(`恢复完成（${counts}）。${suffix}`, true);
         await loadBackup();
       } catch (error) { message(error.message); }
     }
@@ -313,7 +323,8 @@
       if (!confirm('二次确认：现在执行导入恢复？恢复后当前登录会话可能失效。')) return;
       message('正在解密并恢复，请勿关闭页面…');
       try {
-        const response = await fetch(`/api/admin/backup-import?name=${encodeURIComponent(file.name)}`, {
+        const clearTwoFactor = $('clearTwoFactor').checked;
+        const response = await fetch(`/api/admin/backup-import?name=${encodeURIComponent(file.name)}&clearTwoFactor=${clearTwoFactor ? 1 : 0}`, {
           method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: await file.arrayBuffer(),
         });
         const text = await response.text();
@@ -321,7 +332,8 @@
         try { data = JSON.parse(text); } catch {}
         if (!response.ok) throw Error(data.error || `HTTP ${response.status}`);
         const counts = Object.entries(data.restored || {}).map(([table, count]) => `${table}: ${count}`).join('，');
-        message(`导入完成（${counts}）。请重新登录。`, true);
+        const suffix = data.twoFactorCleared ? '已清除二步验证，请用密码登录后重新绑定。' : '请重新登录。';
+        message(`导入完成（${counts}）。${suffix}`, true);
         input.value = '';
         await loadBackup();
       } catch (error) { message(error.message); }

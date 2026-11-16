@@ -233,7 +233,8 @@ Copilot 收到任务后会分析摘要 PR，只把适用于 Cloudflare Worker �
 - `BACKUP_ENC_KEY` 丢失后无法解密旧备份或已保存的 WebDAV 密码，请备份并妥善保管该密钥，不要随意轮换。
 - 备份内含 TOTP 密钥与用户数据；跨部署恢复时需要同时使用相同的 `BACKUP_ENC_KEY` 和 `TWO_FACTOR_ENC_KEY`，否则备份无法解密或 TOTP 无法继续使用。
 - 恢复入口：后台对应通道行点「文件」，在远程备份列表中点「恢复」，需要二次确认。
-- 离线导入：后台「恢复与导入」支持直接上传本地 `warden-*.enc` 文件（上限 24 MiB），用当前 `BACKUP_ENC_KEY` 解密后覆盖恢复，并记入运行记录。离线导入没有可用的 WebDAV 快照位置，不会自动上传恢复前快照，建议先「立即备份」当前状态。
+- 二步验证（TOTP）密钥用 `TWO_FACTOR_ENC_KEY` 单独加密，和备份文件的 `BACKUP_ENC_KEY` 无关。如果备份来自另一个部署、两边的 `TWO_FACTOR_ENC_KEY` 不同，恢复后所有账户的 App 验证码都会校验失败。此时在「恢复与导入」勾选「恢复后清除所有账户的二步验证（App 验证码）」再执行恢复：会删除全部验证器绑定和恢复码，并撤销记住设备，各账户用密码登录后重新绑定即可。
+- 离线导入：后台「恢复与导入」支持直接上传本地 `warden-*.enc` 文件（上限 24 MiB），用当前 `BACKUP_ENC_KEY` 解密后覆盖恢复，并记入运行记录。离线导入没有可用的 WebDAV 快照位置，不会自动上传恢复前快照，建议先「立即备份」当前状态；同样支持上述「清除二步验证」选项。
 - 后台页面采用左侧菜单布局：概览、注册白名单、备份通道、运行记录、恢复与导入、用户。
 
 ### 9.2 在全新 Worker/D1 上恢复
@@ -244,8 +245,8 @@ Copilot 收到任务后会分析摘要 PR，只把适用于 Cloudflare Worker �
 2. 配置运行时 Secrets：`BACKUP_ENC_KEY` 和 `TWO_FACTOR_ENC_KEY` 必须与备份时一致；`JWT_SECRET`/`JWT_REFRESH_SECRET` 可以是新值（旧会话本来就会失效）；`ADMIN_EMAIL` 保持备份中的管理员邮箱。
 3. 临时设置 `SIGNUPS_ALLOWED=true` 并部署，然后用该管理员邮箱注册一个临时账号并登录 `/admin`——恢复 API 要求管理员 Bearer token，空库需要这个跳板账号。
 4. 在「加密备份（WebDAV）」中重新添加一个指向原备份目录的通道（通道配置不在备份内），点「测试」确认连接正常。
-5. 点该通道的「文件」，选择目标 `warden-*.enc` 并「恢复」。恢复会先上传 `warden-pre-restore-*.enc` 快照，再整体覆盖数据表；完成后所有会话失效。
-6. 用备份时的原始账号重新登录，确认密码项、文件夹、Send、设备、TOTP 状态和注册白名单均已恢复；最后把 `SIGNUPS_ALLOWED` 改回 `false`。
+5. 点该通道的「文件」，选择目标 `warden-*.enc` 并「恢复」。如果新实例的 `TWO_FACTOR_ENC_KEY` 与备份来源不同，先勾选「恢复后清除所有账户的二步验证（App 验证码）」。恢复会先上传 `warden-pre-restore-*.enc` 快照，再整体覆盖数据表；完成后所有会话失效。
+6. 用备份时的原始账号重新登录，确认密码项、文件夹、Send、设备、TOTP 状态和注册白名单均已恢复；最后把 `SIGNUPS_ALLOWED` 改回 `false`。如果第 5 步清除了二步验证，登录后到安全设置里重新绑定验证器 App。
 
 注意事项：
 
@@ -294,6 +295,23 @@ BACKUP_ENC_KEY=<base64-32-byte-key>
 ### 管理页面无法操作
 
 确认当前登录邮箱与 `ADMIN_EMAIL` 一致，并使用 `Authorization: Bearer`；仅 session cookie 登录不会通过管理 API。后台入口是 `/admin`（`/admin.html` 同样可用）；访问时返回 401 表示当前 session cookie 不属于 `ADMIN_EMAIL` 对应的账号。
+
+### 恢复后输入 App 验证码一直转圈或提示无效
+
+二步验证密钥用 `TWO_FACTOR_ENC_KEY` 单独加密保存。恢复/导入只保证 `BACKUP_ENC_KEY` 一致，不会校验 `TWO_FACTOR_ENC_KEY`：两边密钥不同时，服务端无法解密备份里的 TOTP 密钥，验证码自然全部无效（日志里会出现 `Authenticator secret cannot be decrypted`）。
+
+处理方式二选一：
+
+- 如果还保留启用二步验证时的恢复码，选择「使用恢复码」登录（接口为 `twoFactorProvider=8`），登录成功后该账户的验证器会自动停用，再重新绑定。
+- 否则重新执行一次恢复，并在「恢复与导入」勾选「恢复后清除所有账户的二步验证（App 验证码）」；恢复后所有账户用密码登录并重新绑定。demo 环境也可以手动运行 `Deploy demo` 并勾选 `clear_two_factor` 输入项直接清除。
+- 已经恢复完成、所有人都被挡在 2FA 之外时，可以直接清空 D1 中的二步验证状态（会同时撤销记住设备）：
+
+```bash
+wrangler d1 execute vault1 --remote --config wrangler.production.jsonc --command \
+  "DELETE FROM two_factor_authenticator; UPDATE users SET totp_recover = NULL; UPDATE devices SET remember_token_hash = NULL, remember_expires_at = NULL;"
+```
+
+跨部署恢复时请保证 `TWO_FACTOR_ENC_KEY` 与备份来源一致，或提前勾选清除，可避免此问题。
 
 ### 登录返回 405，但无痕窗口可以
 
