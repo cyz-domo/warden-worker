@@ -76,8 +76,10 @@ jobs:
             --json > /tmp/demo-d1-state.json
           initialized=$(node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync('/tmp/demo-d1-state.json','utf8'));const row=data&&data[0]&&data[0].results&&data[0].results[0];process.stdout.write(String(row?row.tables:0))")
           if [ "$initialized" = "1" ]; then
-            echo "Demo D1 already initialized; applying incremental migrations."
-            wrangler d1 migrations apply vault1 --remote --config wrangler.demo.jsonc
+            # schema_full.sql is authoritative for the demo database; its
+            # columns already include every migration, so re-applying them
+            # would fail with duplicate column errors.
+            echo "Demo D1 already initialized; skipping migrations."
           else
             echo "Demo D1 is empty; applying schema_full.sql."
             wrangler d1 execute vault1 --remote --config wrangler.demo.jsonc --file sql/schema_full.sql
