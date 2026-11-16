@@ -317,6 +317,7 @@ pub async fn attestation_options(
                 "userVerification": "required"
             },
             "attestation": "none",
+            "hints": ["client-device", "hybrid"],
             "extensions": { "prf": {} }
         },
         "token": token
