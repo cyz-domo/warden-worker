@@ -1,0 +1,45 @@
+name: Diagnose WebAuthn
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: Account email to inspect
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TARGET_EMAIL: ${{ inputs.email }}
+    steps:
+      - name: Query D1
+        run: |
+          set -euo pipefail
+          email=$(printf '%s' "$TARGET_EMAIL" | tr '[:upper:]' '[:lower:]')
+          case "$email" in
+            ''|*[!a-z0-9_.@+-]*) echo "Invalid email"; exit 1 ;;
+          esac
+          echo "Account: $email"
+          for name in warden-sql warden-worker-demo-db; do
+            id=$(curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database?name=$name" \
+              | jq -r --arg name "$name" '.result[]? | select(.name == $name) | .uuid' | head -1)
+            if [ -z "$id" ]; then
+              echo "DB $name: not found"
+              continue
+            fi
+            echo "DB $name ($id)"
+            sql="SELECT u.id AS user_id, u.email, u.created_at AS user_created, w.id AS credential_row, w.name AS credential_name, w.prf_status, w.encrypted_user_key IS NOT NULL AS has_user_key, w.encrypted_public_key IS NOT NULL AS has_public_key, w.encrypted_private_key IS NOT NULL AS has_private_key, w.created_at AS credential_created FROM users u LEFT JOIN webauthn_credentials w ON w.user_id = u.id WHERE lower(u.email) = lower(?1)"
+            jq -n --arg sql "$sql" --arg email "$email" '{sql: $sql, params: [$email]}' \
+              | curl -sf -X POST -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+                  --data @- "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database/$id/query" \
+              | jq -c '.result[0].results // .errors'
+          done
