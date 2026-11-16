@@ -64,7 +64,12 @@ jobs:
           WORKER_NAME: ${{ env.DEMO_WORKER_NAME }}
           D1_DATABASE_NAME: ${{ env.D1_DATABASE_NAME }}
           D1_DATABASE_ID: ${{ env.D1_DATABASE_ID }}
-        run: node scripts/render-wrangler-config.mjs wrangler.deploy.template.jsonc wrangler.demo.jsonc
+        run: |
+          set -euo pipefail
+          node scripts/render-wrangler-config.mjs wrangler.deploy.template.jsonc wrangler.demo.jsonc
+          # The demo relies on manual backup/restore; its Cloudflare token cannot
+          # update Cron Triggers, and the shared template always carries one.
+          sed -i '/"triggers":/d' wrangler.demo.jsonc
       - name: Initialize demo database if empty
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
