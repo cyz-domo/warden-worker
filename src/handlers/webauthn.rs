@@ -309,7 +309,7 @@ pub async fn save_credential(
         name.into(),
         credential_id.into(),
         webauthn::b64_std_encode(&credential.public_key).into(),
-        (auth_data.sign_count as i64).into(),
+        (auth_data.sign_count as f64).into(),
         payload
             .encrypted_user_key
             .map(|v| v.into())
@@ -528,7 +528,7 @@ pub async fn verify_passkey_login(
          WHERE user_id = ?3 AND credential_id = ?4",
     )
     .bind(&[
-        sign_count.into(),
+        (sign_count as f64).into(),
         now.into(),
         user_id.clone().into(),
         credential_id.into(),

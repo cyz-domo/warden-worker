@@ -697,11 +697,11 @@ pub async fn activate_webauthn(
     )
     .bind(&[
         claims.sub.clone().into(),
-        (key_id as i64).into(),
+        (key_id as f64).into(),
         name.into(),
         credential_id.into(),
         webauthn::b64_std_encode(&credential.public_key).into(),
-        (auth_data.sign_count as i64).into(),
+        (auth_data.sign_count as f64).into(),
         now.into(),
     ])?
     .run()
@@ -733,7 +733,7 @@ pub async fn deactivate_webauthn(
         .parse()
         .map_err(|_| AppError::BadRequest("Invalid key id".to_string()))?;
     db.prepare("DELETE FROM two_factor_webauthn WHERE user_id = ?1 AND key_id = ?2")
-        .bind(&[claims.sub.clone().into(), (key_id as i64).into()])?
+        .bind(&[claims.sub.clone().into(), (key_id as f64).into()])?
         .run()
         .await
         .map_err(|_| AppError::Database)?;
@@ -911,7 +911,7 @@ pub async fn verify_webauthn_2fa(
          WHERE user_id = ?3 AND credential_id = ?4",
     )
     .bind(&[
-        received.max(stored_count).into(),
+        (received.max(stored_count) as f64).into(),
         now.into(),
         user_id.into(),
         credential_id.into(),
