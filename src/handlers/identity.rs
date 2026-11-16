@@ -14,7 +14,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 use worker::{wasm_bindgen::JsValue, Env};
 
-use crate::{auth::Claims, db, error::AppError, models::user::User, two_factor};
+use crate::{
+    auth::Claims, db, error::AppError, handlers::webauthn::PrfOption, models::user::User,
+    two_factor,
+};
 
 fn deserialize_trimmed_i32_opt<'de, D>(deserializer: D) -> Result<Option<i32>, D::Error>
 where
@@ -110,6 +113,7 @@ fn generate_tokens_and_response(
     user: User,
     env: &Arc<Env>,
     device_identifier: Option<&str>,
+    prf_option: Option<&PrfOption>,
 ) -> Result<Value, AppError> {
     let now = Utc::now();
     let expires_in = Duration::hours(2);
@@ -156,6 +160,27 @@ fn generate_tokens_and_response(
         &EncodingKey::from_secret(jwt_refresh_secret.as_ref()),
     )?;
 
+    let mut user_decryption_options = json!({
+        "HasMasterPassword": true,
+        "MasterPasswordUnlock": {
+            "Kdf": {
+                "KdfType": user.kdf_type,
+                "Iterations": user.kdf_iterations,
+                "Memory": null,
+                "Parallelism": null
+            },
+            "MasterKeyEncryptedUserKey": user.key,
+            "MasterKeyWrappedUserKey": user.key,
+            "Salt": user.email
+        },
+        "Object": "userDecryptionOptions"
+    });
+    if let Some(prf_option) = prf_option {
+        if let Some(options) = user_decryption_options.as_object_mut() {
+            options.insert("WebAuthnPrfOption".to_string(), prf_option.identity_json());
+        }
+    }
+
     Ok(json!({
         "ForcePasswordReset": false,
         "Kdf": user.kdf_type,
@@ -166,21 +191,7 @@ fn generate_tokens_and_response(
         "MasterPasswordPolicy": { "Object": "masterPasswordPolicy" },
         "PrivateKey": user.private_key,
         "ResetMasterPassword": false,
-        "UserDecryptionOptions": {
-            "HasMasterPassword": true,
-            "MasterPasswordUnlock": {
-                "Kdf": {
-                    "KdfType": user.kdf_type,
-                    "Iterations": user.kdf_iterations,
-                    "Memory": null,
-                    "Parallelism": null
-                },
-                "MasterKeyEncryptedUserKey": user.key,
-                "MasterKeyWrappedUserKey": user.key,
-                "Salt": user.email
-            },
-            "Object": "userDecryptionOptions"
-        },
+        "UserDecryptionOptions": user_decryption_options,
         "AccountKeys": {
             "publicKeyEncryptionKeyPair": {
                 "wrappedPrivateKey": user.private_key,
@@ -482,6 +493,7 @@ async fn complete_login(
     payload: &TokenRequest,
     user: User,
     remember_token_to_return: Option<String>,
+    prf_option: Option<&PrfOption>,
 ) -> Result<Response, AppError> {
     let user_id = user.id.clone();
     let device_identifier = payload.device_identifier.clone();
@@ -497,7 +509,7 @@ async fn complete_login(
     );
 
     let mut response =
-        generate_tokens_and_response(user, env, payload.device_identifier.as_deref())?;
+        generate_tokens_and_response(user, env, payload.device_identifier.as_deref(), prf_option)?;
     let remember_token_to_set = remember_token_to_return.clone();
 
     if let Some(device_identifier) = device_identifier.as_deref() {
@@ -807,7 +819,7 @@ pub async fn token(
                 }
             }
 
-            complete_login(&db, &env, &payload, user, remember_token_to_return).await
+            complete_login(&db, &env, &payload, user, remember_token_to_return, None).await
         }
         "refresh_token" => {
             let refresh_token = payload
@@ -855,7 +867,7 @@ pub async fn token(
             }
 
             let response =
-                generate_tokens_and_response(user, &env, refresh_claims.device.as_deref())?;
+                generate_tokens_and_response(user, &env, refresh_claims.device.as_deref(), None)?;
             let mut resp = Json(response.clone()).into_response();
             if let Some(v) = response.get("access_token").and_then(|v| v.as_str()) {
                 set_cookie(
@@ -889,7 +901,7 @@ pub async fn token(
                 .ok_or_else(|| AppError::BadRequest("Missing deviceResponse".to_string()))?;
             // The passkey assertion is already user-verified; the web client does not
             // run a second factor after a WebAuthn first factor.
-            let user = crate::handlers::webauthn::verify_passkey_login(
+            let login = crate::handlers::webauthn::verify_passkey_login(
                 &env,
                 &db,
                 &headers,
@@ -897,7 +909,15 @@ pub async fn token(
                 device_response,
             )
             .await?;
-            complete_login(&db, &env, &payload, user, None).await
+            complete_login(
+                &db,
+                &env,
+                &payload,
+                login.user,
+                None,
+                login.prf_option.as_ref(),
+            )
+            .await
         }
         "send_access" => generate_send_access_response(&env, &db, &payload).await,
         _ => Err(AppError::BadRequest("Unsupported grant_type".to_string())),

@@ -123,7 +123,8 @@ openssl rand -base64 32
 
 - 注册和登录都要求验证器支持 ES256（P-256），并会校验 RP ID、origin、用户存在/验证标志和签名计数器。
 - 通行密钥登录要求使用可发现凭据（discoverable credential / resident key），因此注册时会要求 `residentKey=required`；仅支持非驻留凭据的安全密钥只能用于二步验证。
-- 目前不支持 PRF：密钥列表中的 `PrfStatus` 固定为 2（Unsupported），因此「使用通行密钥解锁密码库」不可用，但通行密钥登录和二步验证不受影响。
+- 支持 WebAuthn PRF：支持 PRF 的验证器可在注册时或之后启用「使用通行密钥解锁密码库」，登录后无需再输入主密码；未启用 PRF 的通行密钥仍需主密码解锁。`PrfStatus` 为 0（Enabled）、1（Supported）或 2（Unsupported），PRF 密文只由客户端生成，服务端仅按用户隔离保存。
+- 在此前版本注册的通行密钥会被标记为 Unsupported，且无法事后判断验证器是否支持 PRF，需要删除后重新注册才能启用 PRF 解锁。
 - `workers.dev` 域名的 RP ID 是 `*.workers.dev` 的子域，部分平台（尤其 iOS/macOS）要求 RP ID 与可注册域后缀匹配。如果遇到注册失败，请绑定自定义域并设置 `WEBAUTHN_RP_ID` 与 `WEBAUTHN_ORIGIN`。
 - WebAuthn 表由 Worker 运行时自动创建；已有部署无需手动迁移。二步验证密钥（TOTP）仍只使用 `TWO_FACTOR_ENC_KEY`，WebAuthn 公钥和挑战不经过该密钥加密。
 

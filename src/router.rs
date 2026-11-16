@@ -248,7 +248,7 @@ pub fn api_router(env: Env) -> Router {
         )
         .route(
             "/api/webauthn/assertion-options",
-            post(webauthn::assertion_options_unsupported),
+            post(webauthn::assertion_options),
         )
         .route(
             "/api/webauthn/{id}/delete",
