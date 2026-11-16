@@ -177,25 +177,61 @@ impl WebDavClient {
         let (status, body) = self.request("MKCOL", url, None, None, None).await?;
         match status {
             200 | 201 | 204 | 301 | 403 | 405 => Ok(()),
+            // Collections that already exist answer 405 per RFC 4918, but some
+            // providers (e.g. Jianguoyun, including its /dav/ service root)
+            // answer 409 AncestorsNotFound instead. Whether the collection is
+            // usable is decided by the PROPFIND that follows.
+            409 => Ok(()),
             _ => Err(Self::status_error("MKCOL", status, &body)),
         }
     }
 
-    pub async fn ensure_dir(&self) -> Result<(), AppError> {
-        let rest = &self.base[8..];
-        let Some(slash) = rest.find('/') else {
-            return self.mkcol(&self.base).await;
-        };
-        let authority = &rest[..slash];
-        let path = &rest[slash + 1..];
-        let mut prefix = format!("https://{authority}");
-        for segment in path.split('/').filter(|segment| !segment.is_empty()) {
-            prefix.push('/');
-            prefix.push_str(segment);
-            prefix.push('/');
-            self.mkcol(&prefix).await?;
+    async fn dir_exists(&self, url: &str) -> Result<bool, AppError> {
+        let (status, body) = self
+            .request(
+                "PROPFIND",
+                url,
+                Some("application/xml; charset=utf-8"),
+                Some("0"),
+                Some(PROPFIND_BODY.as_bytes()),
+            )
+            .await?;
+        match status {
+            200 | 207 => Ok(true),
+            404 | 409 => Ok(false),
+            401 | 403 => Err(Self::status_error("PROPFIND", status, &body)),
+            _ => Ok(false),
         }
-        Ok(())
+    }
+
+    pub async fn ensure_dir(&self) -> Result<(), AppError> {
+        // Most of the time the configured collection already exists. Checking
+        // first also avoids MKCOL on a service root (Jianguoyun answers 409
+        // for /dav/ even though it exists).
+        if self.dir_exists(&self.base).await? {
+            return Ok(());
+        }
+
+        let rest = &self.base[8..];
+        if let Some(slash) = rest.find('/') {
+            let authority = &rest[..slash];
+            let path = &rest[slash + 1..];
+            let mut prefix = format!("https://{authority}");
+            for segment in path.split('/').filter(|segment| !segment.is_empty()) {
+                prefix.push('/');
+                prefix.push_str(segment);
+                prefix.push('/');
+                self.mkcol(&prefix).await?;
+            }
+        }
+
+        if self.dir_exists(&self.base).await? {
+            Ok(())
+        } else {
+            Err(AppError::BadRequest(
+                "The WebDAV backup directory does not exist and could not be created.".to_string(),
+            ))
+        }
     }
 
     pub async fn put(&self, name: &str, body: &[u8]) -> Result<(), AppError> {

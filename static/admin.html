@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Warden 管理后台</title>
   <style>
-    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:1100px;margin:32px auto;padding:0 16px;color:#172033;background:#f6f8fc}h1{margin-bottom:8px}.muted{color:#64748b}.bar,.card,table{background:#fff;border:1px solid #dbe3ef;border-radius:12px}.bar{padding:16px;display:flex;gap:8px;flex-wrap:wrap}.bar input{flex:1;min-width:260px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:16px 0}.card{padding:16px}.num{font-size:28px;font-weight:700;margin-top:8px}input,button{font:inherit;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px}button{cursor:pointer;background:#172033;color:#fff}button.secondary{background:#fff;color:#172033}button.danger{background:#b42318}section{margin:18px 0}table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden}th,td{text-align:left;padding:11px;border-bottom:1px solid #e5eaf1}th{background:#f8fafc}tr:last-child td{border-bottom:0}.ok{color:#087443}.error{color:#b42318;white-space:pre-wrap}
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:1100px;margin:32px auto;padding:0 16px;color:#172033;background:#f6f8fc}h1{margin-bottom:8px}.muted{color:#64748b}.bar,.card,table{background:#fff;border:1px solid #dbe3ef;border-radius:12px}.bar{padding:16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}.bar input:not([type=number]):not([type=time]):not([type=checkbox]){flex:1;min-width:220px}.bar select,.bar input[type=number],.bar input[type=time]{flex:0 0 auto;width:auto}.bar label{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto}input[type=checkbox]{padding:0;border:0;border-radius:0;width:auto}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:16px 0}.card{padding:16px}.num{font-size:28px;font-weight:700;margin-top:8px}input,button,select{font:inherit;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px}button{cursor:pointer;background:#172033;color:#fff}button.secondary{background:#fff;color:#172033}button.danger{background:#b42318}section{margin:18px 0}table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden}th,td{text-align:left;padding:11px;border-bottom:1px solid #e5eaf1}th{background:#f8fafc}tr:last-child td{border-bottom:0}.ok{color:#087443}.error{color:#b42318;white-space:pre-wrap}
   </style>
 </head>
 <body>
@@ -20,9 +20,9 @@
       <input id="chUrl" placeholder="https://dav.example.com/path/to/warden/">
       <input id="chUser" placeholder="用户名（可选）">
       <input id="chPass" type="password" placeholder="密码（编辑时留空表示不修改）">
-      <select id="chCadence"><option value="off">不自动备份</option><option value="daily">每天</option><option value="weekly">每周</option></select>
-      <input id="chTime" type="time" value="03:00">
-      <select id="chWeekday"><option value="0">周日</option><option value="1" selected>周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option></select>
+      <select id="chCadence" title="备份频次" onchange="syncCadence()"><option value="off">不自动备份</option><option value="daily">每天</option><option value="weekly">每周</option></select>
+      <input id="chTime" type="time" value="03:00" title="备份时间">
+      <select id="chWeekday" title="每周备份的星期"><option value="0">周日</option><option value="1" selected>周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option></select>
       <input id="chOffset" type="number" value="480" min="-720" max="840" title="UTC 偏移（分钟）" placeholder="UTC 偏移分钟">
       <input id="chKeep" type="number" value="7" min="1" max="100" title="保留份数" placeholder="保留份数">
       <label class="muted"><input id="chEnabled" type="checkbox" checked> 启用</label>
@@ -31,6 +31,7 @@
     </div>
     <p class="muted">备份文件在 Worker 内加密后上传；恢复前会自动上传一份当前状态快照。计划时间按 UTC 偏移计算，不处理夏令时。</p>
     <table><thead><tr><th>名称</th><th>WebDAV</th><th>计划</th><th>保留</th><th>上次运行</th><th>状态</th><th>操作</th></tr></thead><tbody id="channelRows"></tbody></table>
+    <p class="muted">在通道行点击“文件”可列出远程备份，并在那里恢复或删除。</p>
     <div class="bar"><button class="secondary" onclick="loadRuns()">刷新运行记录</button><span id="backupMsg"></span></div>
     <table><thead><tr><th>开始时间</th><th>通道</th><th>触发</th><th>状态</th><th>文件</th><th>错误</th></tr></thead><tbody id="runRows"></tbody></table>
   </section>
@@ -118,16 +119,18 @@
       } catch (error) { $('backupKeyHint').textContent = error.message; $('backupKeyHint').className = 'error'; }
     }
     async function loadRuns() { try { const data = await api('/api/admin/backup-runs'); renderRuns(data.data || []); backupMessage('运行记录已刷新', true); } catch (error) { backupMessage(error.message); } }
+    function syncCadence() { $('chWeekday').hidden = $('chCadence').value !== 'weekly'; }
     function resetChannelForm() {
       editingChannelId = null;
       for (const id of ['chName', 'chUrl', 'chUser', 'chPass']) $(id).value = '';
-      $('chCadence').value = 'daily'; $('chTime').value = '03:00'; $('chWeekday').value = '1'; $('chOffset').value = '480'; $('chKeep').value = '7'; $('chEnabled').checked = true;
+      $('chCadence').value = 'daily'; $('chTime').value = '03:00'; $('chWeekday').value = '1'; $('chOffset').value = '480'; $('chKeep').value = '7'; $('chEnabled').checked = true; syncCadence();
     }
     function editChannel(channel) {
       editingChannelId = channel.id;
       $('chName').value = channel.name; $('chUrl').value = channel.url; $('chUser').value = channel.username || ''; $('chPass').value = '';
       $('chCadence').value = channel.cadence; $('chTime').value = channel.time || '03:00'; $('chWeekday').value = String(channel.weekday ?? 1);
       $('chOffset').value = String(channel.utcOffsetMinutes ?? 480); $('chKeep').value = String(channel.keepCount ?? 7); $('chEnabled').checked = !!channel.enabled;
+      syncCadence();
       $('chName').scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
     async function saveChannel() {
@@ -187,6 +190,7 @@
     async function addEmail() { try { await api('/api/admin/allowlist', { method: 'POST', body: JSON.stringify({ email: $('email').value, enabled: true }) }); $('email').value = ''; await loadAll(); } catch (error) { message(error.message); } }
     async function toggle(email, enabled) { try { await api(`/api/admin/allowlist/${encodeURIComponent(email)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }); await loadAll(); } catch (error) { message(error.message); } }
     async function removeEmail(email) { if (!confirm('确认删除该邮箱？')) return; try { await api(`/api/admin/allowlist/${encodeURIComponent(email)}`, { method: 'DELETE' }); await loadAll(); } catch (error) { message(error.message); } }
+    syncCadence();
   </script>
 </body>
 </html>
