@@ -1,0 +1,133 @@
+name: Deploy demo
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: test
+    env:
+      DEMO_WORKER_NAME: warden-worker-demo
+      DEMO_D1_NAME: warden-worker-demo-db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: wasm32-unknown-unknown
+      - name: Install worker-build
+        run: cargo install worker-build@0.8.7 --locked
+      - name: Verify versions
+        run: ./scripts/verify-version.sh
+      - name: Build Worker
+        env:
+          RUSTFLAGS: '--cfg getrandom_backend="wasm_js"'
+        run: worker-build --release
+      - name: Install Wrangler
+        run: npm install --global wrangler@4.114.0
+      - name: Validate Cloudflare credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: test -n "$CLOUDFLARE_API_TOKEN" && test "${#CLOUDFLARE_ACCOUNT_ID}" -eq 32
+      - name: Ensure demo D1 exists
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          wrangler d1 list --json > /tmp/d1-list.json
+          id=$(node - <<'NODE'
+          const fs = require('fs');
+          const list = JSON.parse(fs.readFileSync('/tmp/d1-list.json', 'utf8'));
+          const found = list.find(item => item.name === process.env.DEMO_D1_NAME);
+          if (found) process.stdout.write(found.uuid);
+          NODE
+          )
+          if [ -z "$id" ]; then
+            wrangler d1 create "$DEMO_D1_NAME" --json > /tmp/d1-create.json
+            id=$(node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync('/tmp/d1-create.json','utf8'));const row=Array.isArray(data)?data[0]:data;process.stdout.write(row.uuid||row.id||(row.result&&row.result.uuid)||'')")
+          fi
+          test -n "$id" || { echo "Could not resolve demo D1 id"; exit 1; }
+          {
+            echo "D1_DATABASE_ID=$id"
+            echo "D1_DATABASE_NAME=$DEMO_D1_NAME"
+          } >> "$GITHUB_ENV"
+          {
+            echo "## Demo resources"
+            echo "- Worker: \`$DEMO_WORKER_NAME\`"
+            echo "- D1: \`$DEMO_D1_NAME\` (\`$id\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Render deployment config
+        env:
+          WORKER_NAME: ${{ env.DEMO_WORKER_NAME }}
+          D1_DATABASE_NAME: ${{ env.D1_DATABASE_NAME }}
+          D1_DATABASE_ID: ${{ env.D1_DATABASE_ID }}
+        run: node scripts/render-wrangler-config.mjs wrangler.deploy.template.jsonc /tmp/wrangler.deploy.jsonc
+      - name: Initialize demo database if empty
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          wrangler d1 execute vault1 --remote --config /tmp/wrangler.deploy.jsonc \
+            --command "SELECT COUNT(1) AS tables FROM sqlite_master WHERE type = 'table' AND name = 'users'" \
+            --json > /tmp/demo-d1-state.json
+          initialized=$(node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync('/tmp/demo-d1-state.json','utf8'));const row=data&&data[0]&&data[0].results&&data[0].results[0];process.stdout.write(String(row?row.tables:0))")
+          if [ "$initialized" = "1" ]; then
+            echo "Demo D1 already initialized; applying incremental migrations."
+            wrangler d1 migrations apply vault1 --remote --config /tmp/wrangler.deploy.jsonc
+          else
+            echo "Demo D1 is empty; applying schema_full.sql."
+            wrangler d1 execute vault1 --remote --config /tmp/wrangler.deploy.jsonc --file sql/schema_full.sql
+          fi
+      - name: Deploy demo Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RUSTFLAGS: '--cfg getrandom_backend="wasm_js"'
+        run: wrangler deploy --config /tmp/wrangler.deploy.jsonc | tee /tmp/deploy.log
+      - name: Sync demo Worker secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_EMAIL: ${{ vars.ADMIN_EMAIL }}
+          SIGNUPS_ALLOWED: ${{ vars.SIGNUPS_ALLOWED || 'true' }}
+        run: |
+          set -euo pipefail
+          test -n "$ADMIN_EMAIL" || { echo "Missing ADMIN_EMAIL environment variable"; exit 1; }
+          existing=$(wrangler secret list --config /tmp/wrangler.deploy.jsonc --json 2>/dev/null || echo '[]')
+          has_secret() { printf '%s' "$existing" | jq -e --arg name "$1" 'map(.name) | index($name)' > /dev/null; }
+          for name in JWT_SECRET JWT_REFRESH_SECRET; do
+            if has_secret "$name"; then echo "$name already configured"; else
+              openssl rand -base64 48 | wrangler secret put "$name" --config /tmp/wrangler.deploy.jsonc
+            fi
+          done
+          for name in TWO_FACTOR_ENC_KEY BACKUP_ENC_KEY; do
+            if has_secret "$name"; then echo "$name already configured"; else
+              openssl rand -base64 32 | wrangler secret put "$name" --config /tmp/wrangler.deploy.jsonc
+            fi
+          done
+          printf '%s' "$ADMIN_EMAIL" | wrangler secret put ADMIN_EMAIL --config /tmp/wrangler.deploy.jsonc
+          printf '%s' "$SIGNUPS_ALLOWED" | wrangler secret put SIGNUPS_ALLOWED --config /tmp/wrangler.deploy.jsonc
+      - name: Report demo URL and smoke test
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' /tmp/deploy.log | head -1 || true)
+          if [ -z "$url" ]; then
+            subdomain=$(curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" | jq -r '.result.subdomain')
+            url="https://$DEMO_WORKER_NAME.$subdomain.workers.dev"
+          fi
+          echo "Demo URL: $url" >> "$GITHUB_STEP_SUMMARY"
+          curl -fsS --retry 5 --retry-connrefused --retry-delay 3 "$url/api/alive"
+          curl -fsS --retry 5 --retry-connrefused --retry-delay 3 "$url/api/version"
+          curl -fsS --retry 5 --retry-connrefused --retry-delay 3 "$url/api/config" > /dev/null
+          echo "Smoke test passed for $url" >> "$GITHUB_STEP_SUMMARY"
