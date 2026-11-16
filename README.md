@@ -43,7 +43,7 @@ Warden Worker 是一个运行在 Cloudflare Workers 上的轻量级 Bitwarden �
 
 ```bash
 npm install --global wrangler
-cargo install worker-build --locked
+cargo install worker-build@0.8.7 --locked
 rustup target add wasm32-unknown-unknown
 wrangler login
 wrangler whoami

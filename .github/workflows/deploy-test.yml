@@ -25,7 +25,7 @@ jobs:
           toolchain: stable
           target: wasm32-unknown-unknown
       - name: Install worker-build
-        run: cargo install worker-build --locked
+        run: cargo install worker-build@0.8.7 --locked
       - name: Verify versions
         run: ./scripts/verify-version.sh
       - name: Build Worker
