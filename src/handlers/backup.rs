@@ -1,6 +1,7 @@
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use axum::{
+    body::Bytes,
     extract::{Path, Query, State},
     http::HeaderMap,
     Json,
@@ -32,6 +33,7 @@ const MAX_URL: usize = 2048;
 const MAX_USERNAME: usize = 200;
 const MAX_PASSWORD: usize = 512;
 const MAX_KEEP: i64 = 100;
+const MAX_IMPORT_BYTES: usize = 24 * 1024 * 1024;
 
 #[derive(Clone)]
 struct ChannelRow {
@@ -918,6 +920,96 @@ pub async fn restore(
             .await
             {
                 log::warn!("Could not record restore result: {record_error}");
+            }
+            Err(error)
+        }
+    }
+}
+
+fn import_file_name(name: Option<&String>) -> String {
+    let base = name
+        .map(|value| value.rsplit(['/', '\\']).next().unwrap_or(value))
+        .unwrap_or("offline-import.enc");
+    let cleaned: String = base
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(120)
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        "offline-import.enc".to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+
+#[worker::send]
+pub async fn import_backup(
+    claims: Claims,
+    headers: HeaderMap,
+    State(env): State<Arc<Env>>,
+    Query(query): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> Result<Json<Value>, AppError> {
+    require_admin(&claims, &headers, &env).await?;
+    if body.is_empty() {
+        return Err(AppError::BadRequest(
+            "The uploaded backup file is empty.".to_string(),
+        ));
+    }
+    if body.len() > MAX_IMPORT_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "The uploaded backup is larger than {} MiB.",
+            MAX_IMPORT_BYTES / (1024 * 1024)
+        )));
+    }
+    let file_name = import_file_name(query.get("name"));
+    let db = db::get_db(&env)?;
+    ensure_tables(&db).await?;
+    let key = backup_key(&env)?;
+
+    let started = now_secs();
+    let run_id = record_run_start(&db, "", "import", started).await?;
+    let outcome = async {
+        let envelope: Value = serde_json::from_slice(&body)
+            .map_err(|_| AppError::BadRequest("This file is not a Warden backup.".to_string()))?;
+        let payload = decrypt_backup(&key, &envelope)?;
+        let tables = parse_payload(&payload)?;
+        restore_payload(&db, &tables).await
+    }
+    .await;
+
+    match outcome {
+        Ok(counts) => {
+            if let Err(error) = record_run_finish(
+                &db,
+                &run_id,
+                "success",
+                Some(&file_name),
+                Some(body.len() as i64),
+                None,
+                now_secs(),
+            )
+            .await
+            {
+                log::warn!("Could not record import result: {error}");
+            }
+            let restored: HashMap<String, usize> = counts.into_iter().collect();
+            Ok(Json(json!({"restored": restored})))
+        }
+        Err(error) => {
+            if let Err(record_error) = record_run_finish(
+                &db,
+                &run_id,
+                "error",
+                Some(&file_name),
+                Some(body.len() as i64),
+                Some(&error.to_string()),
+                now_secs(),
+            )
+            .await
+            {
+                log::warn!("Could not record import result: {record_error}");
             }
             Err(error)
         }

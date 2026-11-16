@@ -5,40 +5,148 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Warden 管理后台</title>
   <style>
-    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:1100px;margin:32px auto;padding:0 16px;color:#172033;background:#f6f8fc}h1{margin-bottom:8px}.muted{color:#64748b}.bar,.card,table{background:#fff;border:1px solid #dbe3ef;border-radius:12px}.bar{padding:16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}.bar input:not([type=number]):not([type=time]):not([type=checkbox]){flex:1;min-width:220px}.bar select,.bar input[type=number],.bar input[type=time]{flex:0 0 auto;width:auto}.bar label{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto}input[type=checkbox]{padding:0;border:0;border-radius:0;width:auto}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:16px 0}.card{padding:16px}.num{font-size:28px;font-weight:700;margin-top:8px}input,button,select{font:inherit;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px}button{cursor:pointer;background:#172033;color:#fff}button.secondary{background:#fff;color:#172033}button.danger{background:#b42318}section{margin:18px 0}table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden}th,td{text-align:left;padding:11px;border-bottom:1px solid #e5eaf1}th{background:#f8fafc}tr:last-child td{border-bottom:0}.ok{color:#087443}.error{color:#b42318;white-space:pre-wrap}
+    :root{--bg:#f4f6fb;--card:#fff;--line:#dbe3ef;--text:#172033;--muted:#64748b;--sidebar:#111827;--ok:#087443;--err:#b42318}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text);background:var(--bg)}
+    .layout{display:flex;min-height:100vh}
+    .sidebar{width:220px;flex:0 0 220px;background:var(--sidebar);color:#cbd5e1;display:flex;flex-direction:column;padding:20px 12px;position:sticky;top:0;height:100vh}
+    .brand{font-size:18px;font-weight:700;color:#fff;padding:0 10px 18px;letter-spacing:.3px}
+    .brand small{display:block;font-size:12px;font-weight:400;color:#94a3b8;margin-top:3px}
+    nav{display:flex;flex-direction:column;gap:4px;flex:1}
+    nav button{border:0;background:transparent;color:#cbd5e1;text-align:left;padding:10px 12px;border-radius:8px;font:inherit;cursor:pointer}
+    nav button:hover{background:#1f2937;color:#fff}
+    nav button.active{background:#2563eb;color:#fff}
+    .side-foot{font-size:12px;color:#64748b;padding:10px}
+    main{flex:1;min-width:0;padding:24px 28px 60px}
+    .topbar{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+    h1{font-size:22px;margin:0;flex:1}
+    h2{font-size:16px;margin:0 0 12px}
+    .muted{color:var(--muted)}
+    .card,table,.bar{background:var(--card);border:1px solid var(--line);border-radius:12px}
+    .bar{padding:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .bar input:not([type=number]):not([type=time]):not([type=checkbox]):not([type=file]){flex:1;min-width:200px}
+    .bar select,.bar input[type=number],.bar input[type=time],.bar input[type=file]{flex:0 0 auto;width:auto}
+    .bar label{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto}
+    input,button,select{font:inherit;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:var(--text)}
+    input[type=checkbox]{padding:0;border:0;width:auto}
+    button{cursor:pointer;background:var(--text);color:#fff;border-color:var(--text)}
+    button.secondary{background:#fff;color:var(--text);border-color:#cbd5e1}
+    button.danger{background:var(--err);border-color:var(--err)}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:18px}
+    .card{padding:16px}
+    .num{font-size:28px;font-weight:700;margin-top:6px}
+    table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden}
+    th,td{text-align:left;padding:11px;border-bottom:1px solid #e5eaf1;vertical-align:top}
+    th{background:#f8fafc;font-weight:600}
+    tr:last-child td{border-bottom:0}
+    section.view{display:none}
+    section.view.active{display:block}
+    .stack{display:flex;flex-direction:column;gap:18px}
+    .ok{color:var(--ok)}
+    .error{color:var(--err);white-space:pre-wrap}
+    .hint{font-size:13px;color:var(--muted);margin:10px 0 0}
+    .drop{border:2px dashed #cbd5e1;border-radius:12px;padding:22px;background:#fff;display:flex;flex-direction:column;gap:10px}
+    .drop strong{font-size:15px}
+    .drop .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    @media (max-width:880px){
+      .layout{flex-direction:column}
+      .sidebar{width:auto;flex:0 0 auto;height:auto;position:static;flex-direction:row;align-items:center;padding:10px;overflow-x:auto}
+      .brand{padding:0 12px}.brand small{display:none}
+      nav{flex-direction:row;flex:1}
+      nav button{white-space:nowrap}
+      .side-foot{display:none}
+      main{padding:16px}
+    }
   </style>
 </head>
 <body>
-  <h1>Warden 管理后台</h1><p class="muted">仅管理员登录会话可访问。</p>
-  <div class="bar"><button onclick="loadAll()">加载数据</button><span id="msg"></span></div>
-  <div class="cards"><div class="card">用户总数<div class="num" id="users">-</div></div><div class="card">已启用验证器 App<div class="num" id="totp">-</div></div><div class="card">白名单记录<div class="num" id="allowlist">-</div></div><div class="card">启用白名单<div class="num" id="enabled">-</div></div></div>
-  <section><h2>注册邮箱白名单</h2><div class="bar"><input id="email" type="email" placeholder="user@example.com"><button onclick="addEmail()">添加/更新</button></div><table><thead><tr><th>邮箱</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="allowlistRows"></tbody></table></section>
-  <section><h2>加密备份（WebDAV）</h2>
-    <p class="muted" id="backupKeyHint">正在检查备份密钥…</p>
-    <div class="bar">
-      <input id="chName" placeholder="通道名称">
-      <input id="chUrl" placeholder="https://dav.example.com/path/to/warden/">
-      <input id="chUser" placeholder="用户名（可选）">
-      <input id="chPass" type="password" placeholder="密码（编辑时留空表示不修改）">
-      <select id="chCadence" title="备份频次" onchange="syncCadence()"><option value="off">不自动备份</option><option value="daily">每天</option><option value="weekly">每周</option></select>
-      <input id="chTime" type="time" value="03:00" title="备份时间">
-      <select id="chWeekday" title="每周备份的星期"><option value="0">周日</option><option value="1" selected>周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option></select>
-      <input id="chOffset" type="number" value="480" min="-720" max="840" title="UTC 偏移（分钟）" placeholder="UTC 偏移分钟">
-      <input id="chKeep" type="number" value="7" min="1" max="100" title="保留份数" placeholder="保留份数">
-      <label class="muted"><input id="chEnabled" type="checkbox" checked> 启用</label>
-      <button onclick="saveChannel()">保存通道</button>
-      <button class="secondary" onclick="resetChannelForm()">清空表单</button>
-    </div>
-    <p class="muted">备份文件在 Worker 内加密后上传；恢复前会自动上传一份当前状态快照。计划时间按 UTC 偏移计算，不处理夏令时。</p>
-    <table><thead><tr><th>名称</th><th>WebDAV</th><th>计划</th><th>保留</th><th>上次运行</th><th>状态</th><th>操作</th></tr></thead><tbody id="channelRows"></tbody></table>
-    <p class="muted">在通道行点击“文件”可列出远程备份，并在那里恢复或删除。</p>
-    <div class="bar"><button class="secondary" onclick="loadRuns()">刷新运行记录</button><span id="backupMsg"></span></div>
-    <table><thead><tr><th>开始时间</th><th>通道</th><th>触发</th><th>状态</th><th>文件</th><th>错误</th></tr></thead><tbody id="runRows"></tbody></table>
-  </section>
-  <section id="filesSection" hidden><h2>远程备份文件：<span id="filesChannel"></span></h2><table><thead><tr><th>文件</th><th>操作</th></tr></thead><tbody id="fileRows"></tbody></table></section>
-  <section><h2>用户</h2><table><thead><tr><th>邮箱</th><th>名称</th><th>注册时间</th><th>验证器 App</th></tr></thead><tbody id="userRows"></tbody></table></section>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">Warden<small>管理后台</small></div>
+      <nav id="nav">
+        <button data-view="dashboard" class="active">概览</button>
+        <button data-view="allowlist">注册白名单</button>
+        <button data-view="channels">备份通道</button>
+        <button data-view="runs">运行记录</button>
+        <button data-view="restore">恢复与导入</button>
+        <button data-view="users">用户</button>
+      </nav>
+      <div class="side-foot">仅管理员登录会话可访问</div>
+    </aside>
+    <main>
+      <div class="topbar"><h1 id="viewTitle">概览</h1><span id="msg"></span><button class="secondary" onclick="loadAll()">刷新数据</button></div>
+
+      <section class="view active" id="view-dashboard">
+        <div class="cards">
+          <div class="card">用户总数<div class="num" id="users">-</div></div>
+          <div class="card">已启用验证器 App<div class="num" id="totp">-</div></div>
+          <div class="card">白名单记录<div class="num" id="allowlist">-</div></div>
+          <div class="card">启用白名单<div class="num" id="enabled">-</div></div>
+        </div>
+        <p class="hint">左侧选择功能；备份与恢复需要先配置 <code>BACKUP_ENC_KEY</code>。</p>
+      </section>
+
+      <section class="view" id="view-allowlist">
+        <h2>注册邮箱白名单</h2>
+        <div class="bar"><input id="email" type="email" placeholder="user@example.com"><button onclick="addEmail()">添加/更新</button></div>
+        <p class="hint">表为空时允许所有邮箱注册；有记录时仅启用项可注册。</p>
+        <table><thead><tr><th>邮箱</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="allowlistRows"></tbody></table>
+      </section>
+
+      <section class="view" id="view-channels">
+        <h2>加密备份（WebDAV）</h2>
+        <p class="muted" id="backupKeyHint">正在检查备份密钥…</p>
+        <div class="bar">
+          <input id="chName" placeholder="通道名称">
+          <input id="chUrl" placeholder="https://dav.example.com/path/to/warden/">
+          <input id="chUser" placeholder="用户名（可选）">
+          <input id="chPass" type="password" placeholder="密码（编辑时留空表示不修改）">
+          <select id="chCadence" title="备份频次" onchange="syncCadence()"><option value="off">不自动备份</option><option value="daily">每天</option><option value="weekly">每周</option></select>
+          <input id="chTime" type="time" value="03:00" title="备份时间">
+          <select id="chWeekday" title="每周备份的星期"><option value="0">周日</option><option value="1" selected>周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option></select>
+          <input id="chOffset" type="number" value="480" min="-720" max="840" title="UTC 偏移（分钟）" placeholder="UTC 偏移分钟">
+          <input id="chKeep" type="number" value="7" min="1" max="100" title="保留份数" placeholder="保留份数">
+          <label class="muted"><input id="chEnabled" type="checkbox" checked> 启用</label>
+          <button onclick="saveChannel()">保存通道</button>
+          <button class="secondary" onclick="resetChannelForm()">清空表单</button>
+        </div>
+        <p class="hint">备份文件在 Worker 内加密后上传；恢复前会自动上传一份当前状态快照。计划时间按 UTC 偏移计算，不处理夏令时。</p>
+        <table><thead><tr><th>名称</th><th>WebDAV</th><th>计划</th><th>保留</th><th>上次运行</th><th>状态</th><th>操作</th></tr></thead><tbody id="channelRows"></tbody></table>
+        <p class="hint">在通道行点击“文件”会跳到「恢复与导入」，可查看远程备份并执行恢复或删除。</p>
+      </section>
+
+      <section class="view" id="view-runs">
+        <div class="bar"><button class="secondary" onclick="loadRuns()">刷新运行记录</button><span id="runsHint" class="muted">最近 50 条</span></div>
+        <table><thead><tr><th>开始时间</th><th>通道</th><th>触发</th><th>状态</th><th>文件</th><th>错误</th></tr></thead><tbody id="runRows"></tbody></table>
+      </section>
+
+      <section class="view" id="view-restore">
+        <div class="stack">
+          <div class="drop">
+            <strong>导入离线备份包（.enc）</strong>
+            <p class="muted" style="margin:0">直接选择本地的 <code>warden-*.enc</code> 文件恢复数据。文件必须由使用同一个 <code>BACKUP_ENC_KEY</code> 的部署生成；恢复会覆盖全部用户、密码项和设置，且不会自动上传快照。</p>
+            <div class="row"><input id="importFile" type="file" accept=".enc,application/json"><button onclick="importBackup()">导入并恢复</button></div>
+            <p class="muted" style="margin:0">建议先在「备份通道」点“立即备份”保留当前状态。单文件上限 24 MiB；导入会记录到运行记录。</p>
+          </div>
+          <div>
+            <h2>远程备份文件 <span id="filesChannel" class="muted"></span></h2>
+            <p class="hint" id="filesHint">在「备份通道」里点“文件”选择一个通道。</p>
+            <table><thead><tr><th>文件</th><th>操作</th></tr></thead><tbody id="fileRows"></tbody></table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-users">
+        <h2>用户</h2>
+        <table><thead><tr><th>邮箱</th><th>名称</th><th>注册时间</th><th>验证器 App</th></tr></thead><tbody id="userRows"></tbody></table>
+      </section>
+    </main>
+  </div>
+
   <script>
     const $ = id => document.getElementById(id);
+    const views = { dashboard: '概览', allowlist: '注册白名单', channels: '备份通道', runs: '运行记录', restore: '恢复与导入', users: '用户' };
     const headers = () => ({ 'Content-Type': 'application/json' });
     const escapeText = value => String(value ?? '');
     async function api(path, options = {}) {
@@ -52,6 +160,16 @@
     function message(text, ok = false) { $('msg').textContent = text; $('msg').className = ok ? 'ok' : 'error'; }
     function cell(row, value) { const element = document.createElement('td'); element.textContent = escapeText(value); row.appendChild(element); return element; }
     function button(label, className, action) { const element = document.createElement('button'); element.textContent = label; element.className = className; element.addEventListener('click', action); return element; }
+    function showView(name) {
+      for (const section of document.querySelectorAll('section.view')) section.classList.toggle('active', section.id === `view-${name}`);
+      for (const item of document.querySelectorAll('#nav button')) item.classList.toggle('active', item.dataset.view === name);
+      $('viewTitle').textContent = views[name] || name;
+      if (name === 'channels' || name === 'restore') loadBackup();
+      if (name === 'runs') loadRuns();
+      if (name === 'dashboard' || name === 'allowlist' || name === 'users') loadAll();
+    }
+    for (const item of document.querySelectorAll('#nav button')) item.addEventListener('click', () => showView(item.dataset.view));
+
     function renderAllowlist(items) {
       const body = $('allowlistRows'); body.replaceChildren();
       for (const item of items) { const row = document.createElement('tr'); cell(row, item.email); cell(row, item.enabled ? '启用' : '禁用'); cell(row, item.updated_at);
@@ -66,7 +184,6 @@
     let filesChannelId = null;
     function ts(value) { return value ? new Date(Number(value) * 1000).toLocaleString() : '-'; }
     function utcLabel(minutes) { const sign = minutes >= 0 ? '+' : '-'; const absolute = Math.abs(minutes); return `UTC${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}:${String(absolute % 60).padStart(2, '0')}`; }
-    function backupMessage(text, ok = false) { $('backupMsg').textContent = text; $('backupMsg').className = ok ? 'ok' : 'error'; }
     function scheduleText(channel) {
       if (!channel.enabled || channel.cadence === 'off') return '不自动';
       if (channel.cadence === 'daily') return `每天 ${channel.time} (${utcLabel(channel.utcOffsetMinutes)})`;
@@ -103,8 +220,8 @@
       for (const run of items) {
         const row = document.createElement('tr');
         cell(row, ts(run.started_at));
-        cell(row, channelsById.get(run.channel_id)?.name || run.channel_id);
-        cell(row, run.trigger === 'scheduled' ? '定时' : run.trigger === 'restore' ? '恢复' : '手动');
+        cell(row, run.channel_id ? (channelsById.get(run.channel_id)?.name || run.channel_id) : '本地文件');
+        cell(row, run.trigger === 'scheduled' ? '定时' : run.trigger === 'restore' ? '远程恢复' : run.trigger === 'import' ? '离线导入' : '手动');
         cell(row, run.status === 'success' ? '成功' : run.status === 'running' ? '进行中' : '失败');
         cell(row, run.file_name || '');
         const error = cell(row, run.error || ''); error.className = 'error';
@@ -116,9 +233,9 @@
         const [list, runs] = await Promise.all([api('/api/admin/backup-channels'), api('/api/admin/backup-runs')]);
         renderChannels(list.data || [], !!list.encryptionReady);
         renderRuns(runs.data || []);
-      } catch (error) { $('backupKeyHint').textContent = error.message; $('backupKeyHint').className = 'error'; }
+      } catch (error) { const hint = $('backupKeyHint'); hint.textContent = error.message; hint.className = 'error'; }
     }
-    async function loadRuns() { try { const data = await api('/api/admin/backup-runs'); renderRuns(data.data || []); backupMessage('运行记录已刷新', true); } catch (error) { backupMessage(error.message); } }
+    async function loadRuns() { try { const data = await api('/api/admin/backup-runs'); renderRuns(data.data || []); } catch (error) { message(error.message); } }
     function syncCadence() { $('chWeekday').hidden = $('chCadence').value !== 'weekly'; }
     function resetChannelForm() {
       editingChannelId = null;
@@ -140,57 +257,93 @@
       const password = $('chPass').value; if (password) payload.password = password;
       try {
         await api(id ? `/api/admin/backup-channels/${encodeURIComponent(id)}` : '/api/admin/backup-channels', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) });
-        resetChannelForm(); backupMessage('备份通道已保存', true); await loadBackup();
-      } catch (error) { backupMessage(error.message); }
+        resetChannelForm(); message('备份通道已保存', true); await loadBackup();
+      } catch (error) { message(error.message); }
     }
-    async function testChannel(id) { backupMessage('正在测试连接…'); try { await api(`/api/admin/backup-channels/${encodeURIComponent(id)}/test`, { method: 'POST' }); backupMessage('WebDAV 连接正常', true); } catch (error) { backupMessage(error.message); } }
+    async function testChannel(id) { message('正在测试连接…'); try { await api(`/api/admin/backup-channels/${encodeURIComponent(id)}/test`, { method: 'POST' }); message('WebDAV 连接正常', true); } catch (error) { message(error.message); } }
     async function runChannel(channel) {
-      backupMessage('正在导出并上传加密备份…');
+      message('正在导出并上传加密备份…');
       try {
         const result = await api(`/api/admin/backup-channels/${encodeURIComponent(channel.id)}/run`, { method: 'POST' });
-        backupMessage(`备份完成：${result.file}（${Math.round(Number(result.size) / 1024)} KiB）`, true);
+        message(`备份完成：${result.file}（${Math.round(Number(result.size) / 1024)} KiB）`, true);
         await loadBackup();
-      } catch (error) { backupMessage(error.message); await loadBackup(); }
+      } catch (error) { message(error.message); await loadBackup(); }
     }
     async function removeChannel(channel) {
       if (!confirm(`确认删除备份通道“${channel.name}”？远程文件不会删除。`)) return;
-      try { await api(`/api/admin/backup-channels/${encodeURIComponent(channel.id)}`, { method: 'DELETE' }); if (filesChannelId === channel.id) $('filesSection').hidden = true; backupMessage('通道已删除', true); await loadBackup(); } catch (error) { backupMessage(error.message); }
+      try { await api(`/api/admin/backup-channels/${encodeURIComponent(channel.id)}`, { method: 'DELETE' }); if (filesChannelId === channel.id) filesChannelId = null; message('通道已删除', true); await loadBackup(); } catch (error) { message(error.message); }
     }
     async function loadFiles(id, name) {
       try {
         const data = await api(`/api/admin/backup-channels/${encodeURIComponent(id)}/files`);
-        filesChannelId = id; $('filesChannel').textContent = name; $('filesSection').hidden = false;
+        filesChannelId = id; $('filesChannel').textContent = name; $('filesHint').textContent = '恢复会覆盖当前全部数据，并先上传一份当前状态快照。';
         const body = $('fileRows'); body.replaceChildren();
         const files = data.data || [];
-        if (!files.length) { const row = document.createElement('tr'); const empty = cell(row, '目录中没有备份文件'); empty.colSpan = 2; body.appendChild(row); return; }
-        for (const file of files) {
+        if (!files.length) { const row = document.createElement('tr'); const empty = cell(row, '目录中没有备份文件'); empty.colSpan = 2; body.appendChild(row); }
+        else for (const file of files) {
           const row = document.createElement('tr'); cell(row, file.name);
           const actions = document.createElement('td');
           actions.append(button('恢复', 'danger', () => restoreFile(id, file.name)), document.createTextNode(' '), button('删除', 'secondary', () => deleteFile(id, file.name)));
           row.appendChild(actions); body.appendChild(row);
         }
-        $('filesSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
-      } catch (error) { backupMessage(error.message); }
+        showView('restore');
+      } catch (error) { message(error.message); }
     }
     async function restoreFile(id, name) {
       if (!confirm(`恢复“${name}”会覆盖当前全部用户、密码项和设置，并先上传一份当前状态快照。继续？`)) return;
       if (!confirm('二次确认：现在执行恢复？恢复后当前登录会话可能失效。')) return;
-      backupMessage('正在恢复，请勿关闭页面…');
+      message('正在恢复，请勿关闭页面…');
       try {
         const result = await api(`/api/admin/backup-channels/${encodeURIComponent(id)}/restore`, { method: 'POST', body: JSON.stringify({ file: name, confirm: true }) });
         const counts = Object.entries(result.restored || {}).map(([table, count]) => `${table}: ${count}`).join('，');
-        backupMessage(`恢复完成（${counts}）。请重新登录。`, true);
-      } catch (error) { backupMessage(error.message); }
+        message(`恢复完成（${counts}）。请重新登录。`, true);
+        await loadBackup();
+      } catch (error) { message(error.message); }
     }
     async function deleteFile(id, name) {
       if (!confirm(`确认删除远程文件“${name}”？`)) return;
-      try { await api(`/api/admin/backup-channels/${encodeURIComponent(id)}/files/${encodeURIComponent(name)}`, { method: 'DELETE' }); backupMessage('远程文件已删除', true); await loadFiles(id, $('filesChannel').textContent); } catch (error) { backupMessage(error.message); }
+      try { await api(`/api/admin/backup-channels/${encodeURIComponent(id)}/files/${encodeURIComponent(name)}`, { method: 'DELETE' }); message('远程文件已删除', true); await loadFiles(id, $('filesChannel').textContent); } catch (error) { message(error.message); }
     }
-    async function loadAll() { try { const [summary, allowlist, users] = await Promise.all([api('/api/admin/summary'), api('/api/admin/allowlist'), api('/api/admin/users')]); $('users').textContent = summary.users; $('totp').textContent = summary.totpEnabled; $('allowlist').textContent = summary.allowlist; $('enabled').textContent = summary.allowlistEnabled; renderAllowlist(allowlist.data || []); renderUsers(users.data || []); await loadBackup(); message('加载成功', true); } catch (error) { message(error.message); } }
+    async function importBackup() {
+      const input = $('importFile');
+      if (!input.files.length) { message('请选择要导入的 warden-*.enc 备份文件'); return; }
+      const file = input.files[0];
+      if (file.size > 24 * 1024 * 1024) { message('备份文件不能超过 24 MiB'); return; }
+      if (!confirm(`导入“${file.name}”会覆盖当前全部用户、密码项和设置。继续？`)) return;
+      if (!confirm('二次确认：现在执行导入恢复？恢复后当前登录会话可能失效。')) return;
+      message('正在解密并恢复，请勿关闭页面…');
+      try {
+        const response = await fetch(`/api/admin/backup-import?name=${encodeURIComponent(file.name)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: await file.arrayBuffer(),
+        });
+        const text = await response.text();
+        let data = {};
+        try { data = JSON.parse(text); } catch {}
+        if (!response.ok) throw Error(data.error || `HTTP ${response.status}`);
+        const counts = Object.entries(data.restored || {}).map(([table, count]) => `${table}: ${count}`).join('，');
+        message(`导入完成（${counts}）。请重新登录。`, true);
+        input.value = '';
+        await loadBackup();
+      } catch (error) { message(error.message); }
+    }
+    async function loadAll() {
+      try {
+        const [summary, allowlist, users, channels, runs] = await Promise.all([
+          api('/api/admin/summary'), api('/api/admin/allowlist'), api('/api/admin/users'),
+          api('/api/admin/backup-channels'), api('/api/admin/backup-runs'),
+        ]);
+        $('users').textContent = summary.users; $('totp').textContent = summary.totpEnabled;
+        $('allowlist').textContent = summary.allowlist; $('enabled').textContent = summary.allowlistEnabled;
+        renderAllowlist(allowlist.data || []); renderUsers(users.data || []);
+        renderChannels(channels.data || [], !!channels.encryptionReady); renderRuns(runs.data || []);
+        message('加载成功', true);
+      } catch (error) { message(error.message); }
+    }
     async function addEmail() { try { await api('/api/admin/allowlist', { method: 'POST', body: JSON.stringify({ email: $('email').value, enabled: true }) }); $('email').value = ''; await loadAll(); } catch (error) { message(error.message); } }
     async function toggle(email, enabled) { try { await api(`/api/admin/allowlist/${encodeURIComponent(email)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }); await loadAll(); } catch (error) { message(error.message); } }
     async function removeEmail(email) { if (!confirm('确认删除该邮箱？')) return; try { await api(`/api/admin/allowlist/${encodeURIComponent(email)}`, { method: 'DELETE' }); await loadAll(); } catch (error) { message(error.message); } }
     syncCadence();
+    loadAll();
   </script>
 </body>
 </html>
