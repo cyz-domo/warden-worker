@@ -43,14 +43,9 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          wrangler d1 list --json > /tmp/d1-list.json
-          id=$(node - <<'NODE'
-          const fs = require('fs');
-          const list = JSON.parse(fs.readFileSync('/tmp/d1-list.json', 'utf8'));
-          const found = list.find(item => item.name === process.env.DEMO_D1_NAME);
-          if (found) process.stdout.write(found.uuid);
-          NODE
-          )
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database"
+          curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$api?name=$DEMO_D1_NAME" > /tmp/d1-list.json
+          id=$(jq -r --arg name "$DEMO_D1_NAME" '.result[]? | select(.name == $name) | .uuid' /tmp/d1-list.json | head -1)
           if [ -z "$id" ]; then
             wrangler d1 create "$DEMO_D1_NAME" --json > /tmp/d1-create.json
             id=$(node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync('/tmp/d1-create.json','utf8'));const row=Array.isArray(data)?data[0]:data;process.stdout.write(row.uuid||row.id||(row.result&&row.result.uuid)||'')")
