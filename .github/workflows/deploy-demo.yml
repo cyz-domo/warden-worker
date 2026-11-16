@@ -7,14 +7,6 @@ on:
         description: Delete every 2FA enrollment and remembered device in the demo D1
         type: boolean
         default: false
-      test_email:
-        description: Optional email to add to the demo registration allowlist
-        type: string
-        required: false
-      remove_test_email:
-        description: Remove test_email from the demo registration allowlist instead
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -105,28 +97,6 @@ jobs:
           # Idempotent, so existing demo databases also gain the WebAuthn tables.
           wrangler d1 execute vault1 --remote --config wrangler.demo.jsonc \
             --file sql/migrations/20261116_add_webauthn.sql
-      - name: Allowlist test email
-        if: ${{ inputs.test_email != '' }}
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          TEST_EMAIL: ${{ inputs.test_email }}
-        run: |
-          set -euo pipefail
-          email=$(printf '%s' "$TEST_EMAIL" | tr '[:upper:]' '[:lower:]')
-          case "$email" in
-            ''|*[!a-z0-9_.@+-]*) echo "Invalid test email"; exit 1 ;;
-          esac
-          if [ "${{ inputs.remove_test_email }}" = "true" ]; then
-            wrangler d1 execute vault1 --remote --config wrangler.demo.jsonc \
-              --command "DELETE FROM registration_allowlist WHERE email = '$email'"
-            echo "Removed $email from allowlist" >> "$GITHUB_STEP_SUMMARY"
-          else
-            wrangler d1 execute vault1 --remote --config wrangler.demo.jsonc \
-              --command "INSERT INTO registration_allowlist (email, enabled, created_at, updated_at) VALUES ('$email', 1, datetime('now'), datetime('now')) ON CONFLICT(email) DO UPDATE SET enabled = 1, updated_at = excluded.updated_at"
-            echo "Allowlisted $email" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
       - name: Clear demo two-factor state
         if: ${{ inputs.clear_two_factor }}
         env:
