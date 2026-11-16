@@ -121,6 +121,10 @@ pub fn api_router(env: Env) -> Router {
             post(backup::restore),
         )
         .route("/api/admin/backup-runs", get(backup::runs))
+        .route(
+            "/api/admin/backup-import",
+            post(backup::import_backup).layer(DefaultBodyLimit::max(24 * 1024 * 1024)),
+        )
         .route("/api/two-factor", get(two_factor::two_factor_status))
         .route(
             "/api/two-factor/get-authenticator",
