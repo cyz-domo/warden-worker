@@ -5,3 +5,6 @@ vaultwarden-main
 keyguard-app-master
 log
 .DS_Store
+
+.dev.vars
+.cloudflare

@@ -8,9 +8,13 @@
 		{
 			"binding": "vault1",
 			"database_name": "warden-sql",
-			"database_id": "a8169727-90e1-4fba-a475-b177ca619d85"
+			"database_id": "a8169727-90e1-4fba-a475-b177ca619d85",
+			"migrations_dir": "sql/migrations"
 		}
 	],
+	"triggers": {
+		"crons": ["*/15 * * * *"]
+	},
 	"observability": {
 		"logs": {
 			"enabled": true,
