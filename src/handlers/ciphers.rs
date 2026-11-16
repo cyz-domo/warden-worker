@@ -9,7 +9,8 @@ use crate::db;
 use crate::error::AppError;
 use crate::handlers::two_factor::PasswordOrOtpData;
 use crate::models::cipher::{
-    Cipher, CipherData, CipherRequestData, CipherRequestFlat, CreateCipherRequest,
+    Cipher, CipherData, CipherPartialRequest, CipherRequestData, CipherRequestFlat,
+    CreateCipherRequest,
 };
 use axum::extract::Path;
 use serde::Deserialize;
@@ -66,6 +67,16 @@ async fn get_cipher_dbmodel(
     .ok_or(AppError::NotFound("Cipher not found".to_string()))
 }
 
+#[worker::send]
+pub async fn get_cipher(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Path(id): Path<String>,
+) -> Result<Json<Cipher>, AppError> {
+    let existing = get_cipher_dbmodel(&env, &id, &claims.sub).await?;
+    Ok(Json(existing.into()))
+}
+
 async fn create_cipher_inner(
     claims: Claims,
     env: &Arc<Env>,
@@ -77,7 +88,7 @@ async fn create_cipher_inner(
     let now = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
     let cipher_data = CipherData {
-        name: cipher_data_req.name,
+        name: cipher_data_req.name.unwrap_or_default(),
         notes: cipher_data_req.notes,
         login: cipher_data_req.login,
         card: cipher_data_req.card,
@@ -178,32 +189,26 @@ pub async fn update_cipher(
     .await?
     .ok_or(AppError::NotFound("Cipher not found".to_string()))?;
 
-    let cipher_data_req = payload;
+    let existing_data: CipherData = serde_json::from_str(&existing_cipher.data).unwrap_or_default();
 
-    let cipher_data = CipherData {
-        name: cipher_data_req.name,
-        notes: cipher_data_req.notes,
-        login: cipher_data_req.login,
-        card: cipher_data_req.card,
-        identity: cipher_data_req.identity,
-        ssh_key: cipher_data_req.ssh_key,
-        secure_note: cipher_data_req.secure_note,
-        fields: cipher_data_req.fields,
-        password_history: cipher_data_req.password_history,
-        reprompt: cipher_data_req.reprompt,
-    };
+    let r#type = payload.r#type;
+    let organization_id = payload.organization_id.clone();
+    let key = payload.key.clone().or_else(|| existing_cipher.key.clone());
+    let favorite = payload.favorite;
+    let folder_id = payload.folder_id.clone();
 
+    let cipher_data = payload.into_cipher_data(existing_data);
     let data_value = serde_json::to_value(&cipher_data).map_err(|_| AppError::Internal)?;
 
     let cipher = Cipher {
         id: id.clone(),
         user_id: Some(claims.sub.clone()),
-        organization_id: cipher_data_req.organization_id.clone(),
-        r#type: cipher_data_req.r#type,
+        organization_id,
+        r#type,
         data: data_value,
-        key: cipher_data_req.key.or(existing_cipher.key),
-        favorite: cipher_data_req.favorite,
-        folder_id: cipher_data_req.folder_id.clone(),
+        key,
+        favorite,
+        folder_id,
         deleted_at: existing_cipher.deleted_at,
         archived_at: existing_cipher.archived_at,
         created_at: existing_cipher.created_at,
@@ -233,6 +238,45 @@ pub async fn update_cipher(
     .run()
     .await?;
 
+    Ok(Json(cipher))
+}
+
+#[worker::send]
+pub async fn update_cipher_partial(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Path(id): Path<String>,
+    Json(payload): Json<CipherPartialRequest>,
+) -> Result<Json<Cipher>, AppError> {
+    let db = db::get_db(&env)?;
+    let existing = get_cipher_dbmodel(&env, &id, &claims.sub).await?;
+    let now = Utc::now();
+    let now = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+
+    let favorite = payload.favorite.unwrap_or(existing.favorite != 0);
+    let folder_id = match payload.folder_id {
+        Some(folder_id) => folder_id,
+        None => existing.folder_id.clone(),
+    };
+
+    db.prepare(
+        "UPDATE ciphers SET favorite = ?1, folder_id = ?2, updated_at = ?3 WHERE id = ?4 AND user_id = ?5",
+    )
+    .bind(&[
+        favorite.into(),
+        folder_id.clone().into(),
+        now.clone().into(),
+        id.into(),
+        claims.sub.clone().into(),
+    ])?
+    .run()
+    .await
+    .map_err(|_| AppError::Database)?;
+
+    let mut cipher: Cipher = existing.into();
+    cipher.favorite = favorite;
+    cipher.folder_id = folder_id;
+    cipher.updated_at = now;
     Ok(Json(cipher))
 }
 

@@ -2,7 +2,7 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{json, Map, Value};
 
 // This struct represents the data stored in the `data` column of the `ciphers` table.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CipherData {
     pub name: String,
@@ -215,7 +215,11 @@ impl Serialize for Cipher {
             "organizationUseTotp".to_string(),
             json!(self.organization_use_totp),
         );
-        response_map.insert("collectionIds".to_string(), json!(self.collection_ids));
+        // Clients (and the SDK's strict cipher model) expect an array here, never null.
+        response_map.insert(
+            "collectionIds".to_string(),
+            json!(self.collection_ids.clone().unwrap_or_default()),
+        );
         response_map.insert("revisionDate".to_string(), json!(self.updated_at));
         response_map.insert("creationDate".to_string(), json!(self.created_at));
         response_map.insert("deletedDate".to_string(), json!(self.deleted_at));
@@ -423,7 +427,7 @@ fn default_true() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cipher, CipherDBModel};
+    use super::{Cipher, CipherDBModel, CipherData, CipherPartialRequest, CipherRequestData};
     use serde_json::{json, Value};
 
     #[test]
@@ -468,6 +472,11 @@ mod tests {
             permissions.get("restore"),
             Some(&Value::Bool(true)),
             "permissions.restore must exist and be true when edit=true"
+        );
+        assert_eq!(
+            value.get("collectionIds"),
+            Some(&Value::Array(Vec::new())),
+            "personal ciphers must report an empty collectionIds array, not null"
         );
     }
 
@@ -578,6 +587,65 @@ mod tests {
         let value = serde_json::to_value(cipher).expect("serialize cipher");
         assert_eq!(value["secureNote"]["type"], 0);
     }
+
+    #[test]
+    fn cipher_update_request_accepts_missing_name() {
+        let request: CipherRequestData = serde_json::from_value(json!({
+            "type": 1,
+            "login": { "username": "u" }
+        }))
+        .expect("update request without a name");
+
+        assert!(request.name.is_none());
+    }
+
+    #[test]
+    fn cipher_update_keeps_name_and_password_history_when_omitted() {
+        let existing = CipherData {
+            name: "encrypted-name".to_string(),
+            login: Some(json!({ "username": "u" })),
+            password_history: Some(json!([{ "password": "old" }])),
+            ..Default::default()
+        };
+        let request: CipherRequestData = serde_json::from_value(json!({
+            "type": 1,
+            "login": {
+                "username": "u",
+                "uris": [{ "uri": "https://example.com", "match": null }]
+            }
+        }))
+        .expect("update request");
+
+        let merged = request.into_cipher_data(existing);
+
+        assert_eq!(merged.name, "encrypted-name");
+        assert_eq!(
+            merged.password_history,
+            Some(json!([{ "password": "old" }]))
+        );
+        assert_eq!(
+            merged.login.unwrap()["uris"][0]["uri"],
+            "https://example.com"
+        );
+    }
+
+    #[test]
+    fn cipher_partial_request_distinguishes_missing_and_null_folder() {
+        let missing: CipherPartialRequest =
+            serde_json::from_value(json!({ "favorite": true })).expect("partial request");
+        assert!(missing.folder_id.is_none());
+
+        let cleared: CipherPartialRequest = serde_json::from_value(json!({
+            "folderId": null,
+            "favorite": false
+        }))
+        .expect("partial request with null folder");
+        assert_eq!(cleared.folder_id, Some(None));
+
+        let moved: CipherPartialRequest =
+            serde_json::from_value(json!({ "folderId": "folder-1" })).expect("partial request");
+        assert_eq!(moved.folder_id, Some(Some("folder-1".to_string())));
+    }
 }
 
 // Represents the "Cipher" object within the incoming request payload.
@@ -590,7 +658,8 @@ pub struct CipherRequestData {
     pub folder_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub organization_id: Option<String>,
-    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -617,6 +686,27 @@ pub struct CipherRequestData {
     pub last_known_revision_date: Option<String>,
 }
 
+impl CipherRequestData {
+    /// Builds the stored cipher data for an update. Clients that only send the fields they
+    /// changed (or older clients that omit some fields entirely) must not wipe the rest of
+    /// the item, so omitted values fall back to what is already stored.
+    pub fn into_cipher_data(self, existing: CipherData) -> CipherData {
+        CipherData {
+            name: self.name.unwrap_or(existing.name),
+            notes: self.notes,
+            login: self.login.or(existing.login),
+            card: self.card.or(existing.card),
+            identity: self.identity.or(existing.identity),
+            ssh_key: self.ssh_key.or(existing.ssh_key),
+            secure_note: self.secure_note.or(existing.secure_note),
+            // Omitted fields mean the client had none left, so they are not carried over.
+            fields: self.fields,
+            password_history: self.password_history.or(existing.password_history),
+            reprompt: self.reprompt.or(existing.reprompt),
+        }
+    }
+}
+
 // Represents the full request payload for creating a cipher.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -633,4 +723,23 @@ pub struct CipherRequestFlat {
     pub cipher: CipherRequestData,
     #[serde(default)]
     pub collection_ids: Vec<String>,
+}
+
+// Distinguishes an absent JSON field (None) from an explicit `null` (Some(None)).
+fn deserialize_present_option<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// Body of `PUT /api/ciphers/{id}/partial`: the fields a user without edit permission may
+/// change. An absent `folderId` keeps the current folder; an explicit `null` clears it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CipherPartialRequest {
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    pub folder_id: Option<Option<String>>,
+    pub favorite: Option<bool>,
 }
