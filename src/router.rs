@@ -15,7 +15,7 @@ use crate::{
     error::AppError,
     handlers::{
         accounts, admin, backup, ciphers, config, devices, folders, identity, import, sends, sync,
-        two_factor, usage,
+        two_factor, usage, webauthn,
     },
 };
 
@@ -46,6 +46,10 @@ pub fn api_router(env: Env) -> Router {
             post(accounts::register),
         )
         .route("/identity/connect/token", post(identity::token))
+        .route(
+            "/identity/accounts/webauthn/assertion-options",
+            get(webauthn::login_assertion_options),
+        )
         .route(
             "/identity/accounts/register/send-verification-email",
             post(accounts::send_verification_email),
@@ -152,6 +156,22 @@ pub fn api_router(env: Env) -> Router {
             "/api/two-factor/authenticator/disable",
             post(two_factor::authenticator_disable),
         )
+        .route(
+            "/api/two-factor/get-webauthn",
+            post(two_factor::get_webauthn),
+        )
+        .route(
+            "/api/two-factor/get-webauthn-challenge",
+            post(two_factor::get_webauthn_challenge),
+        )
+        .route(
+            "/api/two-factor/webauthn",
+            put(two_factor::activate_webauthn).delete(two_factor::deactivate_webauthn),
+        )
+        .route(
+            "/api/two-factor/disable",
+            put(two_factor::disable_two_factor),
+        )
         .route("/api/sends", get(sends::get_sends).post(sends::post_send))
         .route("/api/sends/file/v2", post(sends::post_send_file_v2))
         .route("/api/sends/access/{access_id}", post(sends::post_access))
@@ -220,7 +240,24 @@ pub fn api_router(env: Env) -> Router {
         .route("/api/alive", get(config::alive))
         .route("/api/now", get(config::now))
         .route("/api/version", get(config::version))
-        .route("/api/webauthn", get(config::webauthn))
+        .route(
+            "/api/webauthn",
+            get(webauthn::list_credentials)
+                .post(webauthn::save_credential)
+                .put(webauthn::update_credential),
+        )
+        .route(
+            "/api/webauthn/attestation-options",
+            post(webauthn::attestation_options),
+        )
+        .route(
+            "/api/webauthn/assertion-options",
+            post(webauthn::assertion_options),
+        )
+        .route(
+            "/api/webauthn/{id}/delete",
+            post(webauthn::delete_credential).delete(webauthn::delete_credential),
+        )
         .route("/api/d1/usage", get(usage::d1_usage))
         .with_state(app_state)
 }

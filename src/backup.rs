@@ -11,7 +11,8 @@ use worker::{D1Database, D1PreparedStatement, Env};
 use crate::error::AppError;
 
 pub const BACKUP_FORMAT: &str = "warden-backup";
-pub const BACKUP_VERSION: u64 = 1;
+pub const BACKUP_VERSION: u64 = 2;
+// Version 1 envelopes were encrypted with this AAD; changing it would break old backups.
 const BACKUP_AAD: &[u8] = b"warden-backup:v1";
 const MAX_PLAINTEXT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ROWS_TOTAL: usize = 20_000;
@@ -142,10 +143,47 @@ pub const TABLES: &[TableSpec] = &[
         ],
     },
     TableSpec {
+        name: "webauthn_credentials",
+        columns: &[
+            "id",
+            "user_id",
+            "name",
+            "credential_id",
+            "public_key",
+            "sign_count",
+            "transports",
+            "prf_status",
+            "encrypted_user_key",
+            "encrypted_public_key",
+            "encrypted_private_key",
+            "created_at",
+            "updated_at",
+            "last_used_at",
+        ],
+    },
+    TableSpec {
+        name: "two_factor_webauthn",
+        columns: &[
+            "user_id",
+            "key_id",
+            "name",
+            "credential_id",
+            "public_key",
+            "sign_count",
+            "created_at",
+            "updated_at",
+            "last_used_at",
+        ],
+    },
+    TableSpec {
         name: "registration_allowlist",
         columns: &["email", "enabled", "created_at", "updated_at"],
     },
 ];
+
+fn is_optional_table(name: &str) -> bool {
+    matches!(name, "webauthn_credentials" | "two_factor_webauthn")
+}
 
 pub fn now_secs() -> i64 {
     Utc::now().timestamp()
@@ -195,6 +233,7 @@ pub async fn ensure_tables(db: &D1Database) -> Result<(), AppError> {
             .await
             .map_err(|_| AppError::Database)?;
     }
+    crate::webauthn::ensure_tables(db).await?;
     Ok(())
 }
 
@@ -271,6 +310,7 @@ fn value_to_binding(value: &Value) -> Result<JsValue, AppError> {
 }
 
 pub async fn export_payload(db: &D1Database) -> Result<Value, AppError> {
+    ensure_tables(db).await?;
     let mut selects = Vec::with_capacity(TABLES.len());
     for table in TABLES {
         selects.push(db.prepare(format!(
@@ -361,8 +401,9 @@ pub fn encrypt_backup(key: &[u8; 32], plaintext: &[u8]) -> Result<Value, AppErro
 pub fn decrypt_backup(key: &[u8; 32], envelope: &Value) -> Result<Value, AppError> {
     let invalid = || AppError::BadRequest("This file is not a Warden backup.".to_string());
     let object = envelope.as_object().ok_or_else(invalid)?;
+    let version = object.get("version").and_then(Value::as_u64);
     if object.get("format").and_then(Value::as_str) != Some(BACKUP_FORMAT)
-        || object.get("version").and_then(Value::as_u64) != Some(BACKUP_VERSION)
+        || !matches!(version, Some(1) | Some(2))
         || object.get("alg").and_then(Value::as_str) != Some("AES-256-GCM")
     {
         return Err(invalid());
@@ -412,8 +453,9 @@ pub fn parse_payload(payload: &Value) -> Result<Vec<ParsedTable>, AppError> {
     let object = payload
         .as_object()
         .ok_or_else(|| invalid("The backup contents are damaged."))?;
+    let version = object.get("version").and_then(Value::as_u64);
     if object.get("format").and_then(Value::as_str) != Some(BACKUP_FORMAT)
-        || object.get("version").and_then(Value::as_u64) != Some(BACKUP_VERSION)
+        || !matches!(version, Some(1) | Some(2))
     {
         return Err(invalid(
             "The backup format is not supported by this deployment.",
@@ -498,11 +540,20 @@ pub fn parse_payload(payload: &Value) -> Result<Vec<ParsedTable>, AppError> {
 
     let mut tables = Vec::with_capacity(TABLES.len());
     for (index, table) in found.into_iter().enumerate() {
-        tables.push(
-            table.ok_or_else(|| {
-                invalid(&format!("The backup is missing {}.", TABLES[index].name))
-            })?,
-        );
+        let spec = &TABLES[index];
+        match table {
+            Some(table) => tables.push(table),
+            None if is_optional_table(spec.name) => tables.push(ParsedTable {
+                name: spec.name.to_string(),
+                columns: spec
+                    .columns
+                    .iter()
+                    .map(|column| column.to_string())
+                    .collect(),
+                rows: Vec::new(),
+            }),
+            None => return Err(invalid(&format!("The backup is missing {}.", spec.name))),
+        }
     }
     Ok(tables)
 }
@@ -511,6 +562,7 @@ pub async fn restore_payload(
     db: &D1Database,
     tables: &[ParsedTable],
 ) -> Result<Vec<(String, usize)>, AppError> {
+    ensure_tables(db).await?;
     let mut statements: Vec<D1PreparedStatement> = Vec::new();
     for table in TABLES.iter().rev() {
         statements.push(db.prepare(format!("DELETE FROM {}", table.name)));
@@ -604,6 +656,7 @@ pub async fn restore_payload(
 /// Restored TOTP secrets only decrypt with the original TWO_FACTOR_ENC_KEY, so a
 /// restore from another deployment can leave every account unable to pass 2FA.
 pub async fn clear_two_factor_state(db: &D1Database) -> Result<(), AppError> {
+    ensure_tables(db).await?;
     let _ = db
         .prepare("ALTER TABLE devices ADD COLUMN remember_token_hash TEXT")
         .run()
@@ -614,6 +667,8 @@ pub async fn clear_two_factor_state(db: &D1Database) -> Result<(), AppError> {
         .await;
     db.batch(vec![
         db.prepare("DELETE FROM two_factor_authenticator"),
+        db.prepare("DELETE FROM two_factor_webauthn"),
+        db.prepare("DELETE FROM webauthn_challenges"),
         db.prepare("UPDATE users SET totp_recover = NULL"),
         db.prepare("UPDATE devices SET remember_token_hash = NULL, remember_expires_at = NULL"),
     ])
@@ -755,6 +810,32 @@ mod tests {
             "columns": ["id"],
             "rows": [],
         }));
+        assert!(parse_payload(&payload).is_err());
+    }
+
+    #[test]
+    fn accepts_version_one_backups_without_webauthn_tables() {
+        let mut payload = empty_payload();
+        payload["version"] = json!(1);
+        payload["tables"].as_array_mut().unwrap().retain(|table| {
+            !matches!(
+                table["name"].as_str(),
+                Some("webauthn_credentials") | Some("two_factor_webauthn")
+            )
+        });
+        let parsed = parse_payload(&payload).expect("parse v1");
+        assert_eq!(parsed.len(), TABLES.len());
+        let credentials = parsed
+            .iter()
+            .find(|table| table.name == "webauthn_credentials")
+            .expect("webauthn table");
+        assert!(credentials.rows.is_empty());
+    }
+
+    #[test]
+    fn rejects_future_backup_versions() {
+        let mut payload = empty_payload();
+        payload["version"] = json!(3);
         assert!(parse_payload(&payload).is_err());
     }
 }

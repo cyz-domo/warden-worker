@@ -13,6 +13,7 @@ mod models;
 mod ratelimit;
 mod router;
 mod two_factor;
+mod webauthn;
 mod webdav;
 
 #[event(fetch)]

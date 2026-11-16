@@ -7,6 +7,7 @@ use crate::{
     auth::Claims,
     db,
     error::AppError,
+    handlers::webauthn::{self, PrfOption},
     models::{
         cipher::{Cipher, CipherDBModel},
         folder::{Folder, FolderResponse},
@@ -82,7 +83,32 @@ pub async fn get_sync_data(
         .map(|s| send_to_json(&s))
         .collect::<Vec<_>>();
 
-    let user_decryption = json!({
+    let prf_options: Vec<Value> = match db
+        .prepare(
+            "SELECT credential_id, encrypted_user_key, encrypted_private_key
+             FROM webauthn_credentials WHERE user_id = ?1 AND prf_status = ?2",
+        )
+        .bind(&[
+            user_id.clone().into(),
+            (webauthn::PRF_STATUS_ENABLED as f64).into(),
+        ])?
+        .all()
+        .await
+    {
+        Ok(result) => result
+            .results::<Value>()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(PrfOption::from_row)
+            .map(|option| option.sync_json())
+            .collect(),
+        Err(error) => {
+            log::warn!("Cannot load passkey PRF options: {error}");
+            Vec::new()
+        }
+    };
+
+    let mut user_decryption = json!({
         "masterPasswordUnlock": {
             "kdf": {
                 "kdfType": user.kdf_type,
@@ -95,6 +121,11 @@ pub async fn get_sync_data(
             "salt": user.email
         }
     });
+    if !prf_options.is_empty() {
+        if let Some(options) = user_decryption.as_object_mut() {
+            options.insert("webAuthnPrfOptions".to_string(), Value::Array(prf_options));
+        }
+    }
 
     let time = chrono::DateTime::parse_from_rfc3339(&user.created_at)
         .map_err(|_| AppError::Internal)?
@@ -111,7 +142,7 @@ pub async fn get_sync_data(
         premium_from_organization: false,
         email_verified: true,
         force_password_reset: false,
-        two_factor_enabled: two_factor::is_authenticator_enabled(&db, &user_id).await?,
+        two_factor_enabled: two_factor::is_two_factor_enabled(&db, &user_id).await?,
         uses_key_connector: false,
         creation_date: time,
         key: user.key,

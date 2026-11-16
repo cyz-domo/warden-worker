@@ -11,3 +11,4 @@ pub mod sends;
 pub mod sync;
 pub mod two_factor;
 pub mod usage;
+pub mod webauthn;

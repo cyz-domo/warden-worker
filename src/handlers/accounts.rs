@@ -206,6 +206,7 @@ async fn delete_account_impl(
     }
 
     let user_id = claims.sub;
+    crate::webauthn::ensure_tables(&db).await?;
     let statements = vec![
         db.prepare("DELETE FROM send_file_chunks WHERE send_file_id IN (SELECT id FROM send_files WHERE user_id = ?1)").bind(&[user_id.clone().into()])?,
         db.prepare("DELETE FROM send_files WHERE user_id = ?1").bind(&[user_id.clone().into()])?,
@@ -214,6 +215,9 @@ async fn delete_account_impl(
         db.prepare("DELETE FROM folders WHERE user_id = ?1").bind(&[user_id.clone().into()])?,
         db.prepare("DELETE FROM devices WHERE user_id = ?1").bind(&[user_id.clone().into()])?,
         db.prepare("DELETE FROM two_factor_authenticator WHERE user_id = ?1").bind(&[user_id.clone().into()])?,
+        db.prepare("DELETE FROM two_factor_webauthn WHERE user_id = ?1").bind(&[user_id.clone().into()])?,
+        db.prepare("DELETE FROM webauthn_credentials WHERE user_id = ?1").bind(&[user_id.clone().into()])?,
+        db.prepare("DELETE FROM webauthn_challenges WHERE user_id = ?1").bind(&[user_id.clone().into()])?,
         db.prepare("DELETE FROM users WHERE id = ?1").bind(&[user_id.into()])?,
     ];
     db.batch(statements).await.map_err(|_| AppError::Database)?;

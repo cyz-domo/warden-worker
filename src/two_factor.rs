@@ -10,6 +10,7 @@ use worker::D1Database;
 use crate::error::AppError;
 
 pub const TWO_FACTOR_PROVIDER_AUTHENTICATOR: i32 = 0;
+pub const TWO_FACTOR_PROVIDER_WEBAUTHN: i32 = 7;
 pub const TWO_FACTOR_PROVIDER_RECOVERY_CODE: i32 = 8;
 
 pub fn generate_totp_secret_base32_20() -> String {
@@ -75,6 +76,39 @@ pub async fn is_authenticator_enabled(db: &D1Database, user_id: &str) -> Result<
         .await
         .map_err(|_| AppError::Database)?;
     Ok(matches!(enabled, Some(1)))
+}
+
+pub async fn is_webauthn_enabled(db: &D1Database, user_id: &str) -> Result<bool, AppError> {
+    crate::webauthn::ensure_tables(db).await?;
+    let count: Option<i64> = db
+        .prepare("SELECT COUNT(1) AS count FROM two_factor_webauthn WHERE user_id = ?1")
+        .bind(&[user_id.into()])?
+        .first(Some("count"))
+        .await
+        .map_err(|_| AppError::Database)?;
+    Ok(count.unwrap_or(0) > 0)
+}
+
+pub async fn is_two_factor_enabled(db: &D1Database, user_id: &str) -> Result<bool, AppError> {
+    Ok(is_authenticator_enabled(db, user_id).await? || is_webauthn_enabled(db, user_id).await?)
+}
+
+pub async fn clear_all_two_factor_state(db: &D1Database, user_id: &str) -> Result<(), AppError> {
+    ensure_two_factor_authenticator_table(db).await?;
+    crate::webauthn::ensure_tables(db).await?;
+    db.batch(vec![
+        db.prepare("DELETE FROM two_factor_authenticator WHERE user_id = ?1")
+            .bind(&[user_id.into()])?,
+        db.prepare("DELETE FROM two_factor_webauthn WHERE user_id = ?1")
+            .bind(&[user_id.into()])?,
+        db.prepare("DELETE FROM webauthn_challenges WHERE user_id = ?1")
+            .bind(&[user_id.into()])?,
+    ])
+    .await
+    .map_err(|_| AppError::Database)?;
+    clear_recovery_code(db, user_id).await?;
+    revoke_device_remember_tokens(db, user_id).await?;
+    Ok(())
 }
 
 pub async fn get_authenticator_secret_enc(

@@ -127,9 +127,9 @@
           <div class="notice">
             <label style="display:flex;align-items:center;gap:8px">
               <input id="clearTwoFactor" type="checkbox">
-              恢复后清除所有账户的二步验证（App 验证码）
+              恢复后清除所有账户的二步验证（App 验证码与安全密钥）
             </label>
-            <p class="muted" style="margin:6px 0 0">二步验证密钥用 <code>TWO_FACTOR_ENC_KEY</code> 单独加密：如果备份来自另一个部署且密钥不同，导入后 App 验证码无法通过。勾选后各账户用密码登录，再重新绑定，同时撤销记住设备。</p>
+            <p class="muted" style="margin:6px 0 0">二步验证密钥用 <code>TWO_FACTOR_ENC_KEY</code> 单独加密：如果备份来自另一个部署且密钥不同，导入后 App 验证码无法通过。勾选后会同时删除 TOTP 验证器、WebAuthn 安全密钥、恢复码和待用挑战，各账户用密码登录后再重新绑定，同时撤销记住设备。</p>
           </div>
           <div class="drop">
             <strong>导入离线备份包（.enc）</strong>
