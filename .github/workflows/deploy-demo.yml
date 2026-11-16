@@ -9,7 +9,10 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: test
+    # Only the production environment holds Cloudflare credentials. This job
+    # deploys the isolated warden-worker-demo Worker and its own D1; it reuses
+    # the production backup/TOTP keys so real backups can be restored here.
+    environment: production
     env:
       DEMO_WORKER_NAME: warden-worker-demo
       DEMO_D1_NAME: warden-worker-demo-db
@@ -97,6 +100,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           ADMIN_EMAIL: ${{ vars.ADMIN_EMAIL }}
           SIGNUPS_ALLOWED: ${{ vars.SIGNUPS_ALLOWED || 'true' }}
+          PRODUCTION_BACKUP_ENC_KEY: ${{ secrets.WORKER_BACKUP_ENC_KEY }}
+          PRODUCTION_TWO_FACTOR_ENC_KEY: ${{ secrets.WORKER_TWO_FACTOR_ENC_KEY }}
         run: |
           set -euo pipefail
           test -n "$ADMIN_EMAIL" || { echo "Missing ADMIN_EMAIL environment variable"; exit 1; }
@@ -107,11 +112,16 @@ jobs:
               openssl rand -base64 48 | wrangler secret put "$name" --config /tmp/wrangler.deploy.jsonc
             fi
           done
-          for name in TWO_FACTOR_ENC_KEY BACKUP_ENC_KEY; do
-            if has_secret "$name"; then echo "$name already configured"; else
-              openssl rand -base64 32 | wrangler secret put "$name" --config /tmp/wrangler.deploy.jsonc
-            fi
-          done
+          if [ -n "$PRODUCTION_TWO_FACTOR_ENC_KEY" ]; then
+            printf '%s' "$PRODUCTION_TWO_FACTOR_ENC_KEY" | wrangler secret put TWO_FACTOR_ENC_KEY --config /tmp/wrangler.deploy.jsonc
+          elif ! has_secret TWO_FACTOR_ENC_KEY; then
+            openssl rand -base64 32 | wrangler secret put TWO_FACTOR_ENC_KEY --config /tmp/wrangler.deploy.jsonc
+          fi
+          if [ -n "$PRODUCTION_BACKUP_ENC_KEY" ]; then
+            printf '%s' "$PRODUCTION_BACKUP_ENC_KEY" | wrangler secret put BACKUP_ENC_KEY --config /tmp/wrangler.deploy.jsonc
+          elif ! has_secret BACKUP_ENC_KEY; then
+            openssl rand -base64 32 | wrangler secret put BACKUP_ENC_KEY --config /tmp/wrangler.deploy.jsonc
+          fi
           printf '%s' "$ADMIN_EMAIL" | wrangler secret put ADMIN_EMAIL --config /tmp/wrangler.deploy.jsonc
           printf '%s' "$SIGNUPS_ALLOWED" | wrangler secret put SIGNUPS_ALLOWED --config /tmp/wrangler.deploy.jsonc
       - name: Report demo URL and smoke test
