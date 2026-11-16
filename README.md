@@ -33,7 +33,7 @@ Warden Worker 是一个运行在 Cloudflare Workers 上的轻量级 Bitwarden �
 - 同步：`GET /api/sync`
 - 密码项：`POST /api/ciphers/create`、`GET /api/ciphers/{id}`、`PUT /api/ciphers/{id}`、`PUT /api/ciphers/{id}/partial`、`PUT /api/ciphers/{id}/delete`
 - 文件夹：`POST /api/folders`、`PUT /api/folders/{id}`、`DELETE /api/folders/{id}`
-- 2FA：`GET /api/two-factor`、`/api/two-factor/authenticator/*`、`/api/two-factor/webauthn`、`/api/two-factor/get-webauthn*`
+- 2FA：`GET /api/two-factor`、`/api/two-factor/authenticator/*`、`/api/two-factor/webauthn`、`/api/two-factor/get-webauthn*`、`PUT /api/two-factor/disable`
 - 通行密钥：`GET /identity/accounts/webauthn/assertion-options`、`GET|POST|PUT /api/webauthn`、`POST /api/webauthn/attestation-options`
 - 官方安卓设备探测：`GET /api/devices/knowndevice`
 
@@ -127,6 +127,8 @@ openssl rand -base64 32
 - 在此前版本注册的通行密钥会被标记为 Unsupported，且无法事后判断验证器是否支持 PRF，需要删除后重新注册才能启用 PRF 解锁。
 - `workers.dev` 域名的 RP ID 是 `*.workers.dev` 的子域，部分平台（尤其 iOS/macOS）要求 RP ID 与可注册域后缀匹配。如果遇到注册失败，请绑定自定义域并设置 `WEBAUTHN_RP_ID` 与 `WEBAUTHN_ORIGIN`。
 - WebAuthn 表由 Worker 运行时自动创建；已有部署无需手动迁移。二步验证密钥（TOTP）仍只使用 `TWO_FACTOR_ENC_KEY`，WebAuthn 公钥和挑战不经过该密钥加密。
+- 通行密钥登录与主密码登录是相互独立的方式：按上游 Bitwarden 的行为，使用通行密钥登录会跳过密码登录的二步验证（客户端目前不支持在 WebAuthn 登录后再完成 2FA）。请把通行密钥当作该账号的完整凭据保管；如果账号要求所有登录方式都必须经过 2FA，请不要注册用于登录的通行密钥。
+- WebAuthn 二步验证只用于主密码登录；启用后请立即查看并离线保存恢复代码，避免唯一的安全密钥丢失后无法登录。删除最后一个安全密钥时应通过设置页的「禁用 WebAuthn 二步验证」（`PUT /api/two-factor/disable`），服务端会拒绝直接删除最后一个密钥。
 
 已有部署不需要额外的迁移步骤：Worker 会在首次使用 remember-device 时自动为 `devices` 表补上 `remember_expires_at` 列（与 `remember_token_hash` 相同的处理方式），全新安装则由 `sql/schema_full.sql` 建表时带上该列。改动之前签发的 remember token 没有记录过期时间，会被视为已过期：相关设备下一次登录需要重新输入一次 TOTP，之后按新的有效期记住。
 

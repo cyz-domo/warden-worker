@@ -732,6 +732,31 @@ pub async fn deactivate_webauthn(
         .into_string()
         .parse()
         .map_err(|_| AppError::BadRequest("Invalid key id".to_string()))?;
+    let key_exists: Option<i64> = db
+        .prepare("SELECT 1 AS ok FROM two_factor_webauthn WHERE user_id = ?1 AND key_id = ?2")
+        .bind(&[claims.sub.clone().into(), (key_id as f64).into()])?
+        .first(Some("ok"))
+        .await
+        .map_err(|_| AppError::Database)?;
+    if key_exists.is_none() {
+        let keys = list_webauthn_keys(&db, &claims.sub).await?;
+        return Ok(Json(json!({
+            "Enabled": !keys.is_empty(),
+            "Keys": keys
+        })));
+    }
+    let key_count: Option<i64> = db
+        .prepare("SELECT COUNT(1) AS count FROM two_factor_webauthn WHERE user_id = ?1")
+        .bind(&[claims.sub.clone().into()])?
+        .first(Some("count"))
+        .await
+        .map_err(|_| AppError::Database)?;
+    if key_count.unwrap_or(0) <= 1 {
+        return Err(AppError::BadRequest(
+            "Cannot delete the last security key; disable WebAuthn two-step login instead"
+                .to_string(),
+        ));
+    }
     db.prepare("DELETE FROM two_factor_webauthn WHERE user_id = ?1 AND key_id = ?2")
         .bind(&[claims.sub.clone().into(), (key_id as f64).into()])?
         .run()
@@ -744,6 +769,54 @@ pub async fn deactivate_webauthn(
         "Enabled": !keys.is_empty(),
         "Keys": keys
     })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisableTwoFactorRequest {
+    #[serde(rename = "type")]
+    pub provider: NumberOrString,
+    #[serde(flatten)]
+    pub verification: PasswordOrOtpData,
+}
+
+#[worker::send]
+pub async fn disable_two_factor(
+    claims: Claims,
+    State(env): State<Arc<Env>>,
+    Json(payload): Json<DisableTwoFactorRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let provider: i64 = payload
+        .provider
+        .into_string()
+        .parse()
+        .map_err(|_| AppError::BadRequest("Invalid two-factor provider".to_string()))?;
+    if provider != two_factor::TWO_FACTOR_PROVIDER_WEBAUTHN as i64 {
+        return Err(AppError::BadRequest(
+            "Unsupported two-factor provider".to_string(),
+        ));
+    }
+
+    let db = db::get_db(&env)?;
+    payload
+        .verification
+        .validate(&db, &claims.sub, &env)
+        .await?;
+    webauthn::ensure_tables(&db).await?;
+
+    db.batch(vec![
+        db.prepare("DELETE FROM two_factor_webauthn WHERE user_id = ?1")
+            .bind(&[claims.sub.clone().into()])?,
+        db.prepare(
+            "DELETE FROM webauthn_challenges WHERE user_id = ?1 AND kind IN ('2fa_login', '2fa_register')",
+        )
+        .bind(&[claims.sub.clone().into()])?,
+    ])
+    .await
+    .map_err(|_| AppError::Database)?;
+    two_factor::revoke_device_remember_tokens(&db, &claims.sub).await?;
+
+    Ok(Json(json!({ "Enabled": false, "Type": 7 })))
 }
 
 pub async fn webauthn_login_options(

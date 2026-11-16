@@ -168,6 +168,10 @@ pub fn api_router(env: Env) -> Router {
             "/api/two-factor/webauthn",
             put(two_factor::activate_webauthn).delete(two_factor::deactivate_webauthn),
         )
+        .route(
+            "/api/two-factor/disable",
+            put(two_factor::disable_two_factor),
+        )
         .route("/api/sends", get(sends::get_sends).post(sends::post_send))
         .route("/api/sends/file/v2", post(sends::post_send_file_v2))
         .route("/api/sends/access/{access_id}", post(sends::post_access))

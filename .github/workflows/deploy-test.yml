@@ -65,7 +65,7 @@ jobs:
           sync_secret() { test -n "${!1:-}" || { echo "Missing Worker secret/value: $1"; exit 1; }; printf '%s' "${!1}" | wrangler secret put "$2" --config /tmp/wrangler.deploy.jsonc; }
           validate_enc_key() {
             local label="$1" value="${!2:-}"
-            node -e 'const v=process.argv[1].trim(); if(!/^[A-Za-z0-9+\/]+={0,2}$/.test(v) || Buffer.from(v,"base64").length !== 32) process.exit(1);' "$value" \
+            printf '%s' "$value" | node -e 'const v=require("fs").readFileSync(0,"utf8").trim(); if(!/^[A-Za-z0-9+\/]+={0,2}$/.test(v) || Buffer.from(v,"base64").length !== 32) process.exit(1);' \
               || { echo "$label must be a base64-encoded 32-byte key (openssl rand -base64 32)"; exit 1; }
           }
           sync_secret JWT_SECRET JWT_SECRET
