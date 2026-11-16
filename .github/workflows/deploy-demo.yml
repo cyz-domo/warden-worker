@@ -94,6 +94,9 @@ jobs:
             echo "Demo D1 is empty; applying schema_full.sql."
             wrangler d1 execute vault1 --remote --config wrangler.demo.jsonc --file sql/schema_full.sql
           fi
+          # Idempotent, so existing demo databases also gain the WebAuthn tables.
+          wrangler d1 execute vault1 --remote --config wrangler.demo.jsonc \
+            --file sql/migrations/20261116_add_webauthn.sql
       - name: Clear demo two-factor state
         if: ${{ inputs.clear_two_factor }}
         env:
@@ -102,8 +105,8 @@ jobs:
         run: |
           set -euo pipefail
           wrangler d1 execute vault1 --remote --config wrangler.demo.jsonc \
-            --command "DELETE FROM two_factor_authenticator; UPDATE users SET totp_recover = NULL; UPDATE devices SET remember_token_hash = NULL, remember_expires_at = NULL;"
-          echo "Demo 2FA enrollments cleared" >> "$GITHUB_STEP_SUMMARY"
+            --command "DELETE FROM two_factor_authenticator; DELETE FROM two_factor_webauthn; DELETE FROM webauthn_challenges; UPDATE users SET totp_recover = NULL; UPDATE devices SET remember_token_hash = NULL, remember_expires_at = NULL;"
+          echo "Demo 2FA enrollments and passkey 2FA keys cleared" >> "$GITHUB_STEP_SUMMARY"
       - name: Deploy demo Worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -132,13 +135,19 @@ jobs:
           done
           if [ -n "$PRODUCTION_TWO_FACTOR_ENC_KEY" ]; then
             printf '%s' "$PRODUCTION_TWO_FACTOR_ENC_KEY" | wrangler secret put TWO_FACTOR_ENC_KEY --config wrangler.demo.jsonc
-          elif ! has_secret TWO_FACTOR_ENC_KEY; then
-            openssl rand -base64 32 | wrangler secret put TWO_FACTOR_ENC_KEY --config wrangler.demo.jsonc
+          else
+            echo "::warning::WORKER_TWO_FACTOR_ENC_KEY is not set in GitHub Secrets; demo TOTP secrets will not match production backups."
+            if ! has_secret TWO_FACTOR_ENC_KEY; then
+              openssl rand -base64 32 | wrangler secret put TWO_FACTOR_ENC_KEY --config wrangler.demo.jsonc
+            fi
           fi
           if [ -n "$PRODUCTION_BACKUP_ENC_KEY" ]; then
             printf '%s' "$PRODUCTION_BACKUP_ENC_KEY" | wrangler secret put BACKUP_ENC_KEY --config wrangler.demo.jsonc
-          elif ! has_secret BACKUP_ENC_KEY; then
-            openssl rand -base64 32 | wrangler secret put BACKUP_ENC_KEY --config wrangler.demo.jsonc
+          else
+            echo "::warning::WORKER_BACKUP_ENC_KEY is not set in GitHub Secrets; demo backups cannot be restored on production."
+            if ! has_secret BACKUP_ENC_KEY; then
+              openssl rand -base64 32 | wrangler secret put BACKUP_ENC_KEY --config wrangler.demo.jsonc
+            fi
           fi
           printf '%s' "$ADMIN_EMAIL" | wrangler secret put ADMIN_EMAIL --config wrangler.demo.jsonc
           printf '%s' "$SIGNUPS_ALLOWED" | wrangler secret put SIGNUPS_ALLOWED --config wrangler.demo.jsonc
@@ -158,4 +167,9 @@ jobs:
           curl -fsS --retry 5 --retry-connrefused --retry-delay 3 "$url/api/alive"
           curl -fsS --retry 5 --retry-connrefused --retry-delay 3 "$url/api/version"
           curl -fsS --retry 5 --retry-connrefused --retry-delay 3 "$url/api/config" > /dev/null
-          echo "Smoke test passed for $url" >> "$GITHUB_STEP_SUMMARY"
+          curl -fsS --retry 5 --retry-connrefused --retry-delay 3 \
+            "$url/identity/accounts/webauthn/assertion-options" \
+            | jq -e '.options.challenge and .token' > /dev/null
+          status=$(curl -s -o /dev/null -w '%{http_code}' "$url/api/webauthn")
+          test "$status" = "401" || { echo "Expected 401 from /api/webauthn, got $status"; exit 1; }
+          echo "Smoke test passed for $url (including WebAuthn options)" >> "$GITHUB_STEP_SUMMARY"

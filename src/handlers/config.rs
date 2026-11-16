@@ -85,12 +85,3 @@ pub async fn alive() -> Json<String> {
 pub async fn version() -> Json<&'static str> {
     Json(option_env!("WARDEN_VERSION").unwrap_or("unknown"))
 }
-
-#[worker::send]
-pub async fn webauthn() -> Json<Value> {
-    Json(json!({
-        "object": "list",
-        "data": [],
-        "continuationToken": null
-    }))
-}

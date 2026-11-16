@@ -18,6 +18,7 @@ Warden Worker 是一个运行在 Cloudflare Workers 上的轻量级 Bitwarden �
 - 无服务器部署：Cloudflare Workers + D1
 - 兼容多端：官方 Bitwarden（浏览器扩展 / 桌面 / 安卓）与多数第三方客户端
 - 核心能力：注册/登录、同步、密码项（Cipher）增删改、文件夹、TOTP（Authenticator）二步验证
+- 通行密钥（WebAuthn/Passkey）：支持使用通行密钥登录，以及把安全密钥作为二步验证（twoFactorProvider=7）
 - 官方安卓兼容：支持 `/api/devices/knowndevice` 与 remember-device（twoFactorProvider=5）流程
 
 ## 客户端使用建议
@@ -32,7 +33,8 @@ Warden Worker 是一个运行在 Cloudflare Workers 上的轻量级 Bitwarden �
 - 同步：`GET /api/sync`
 - 密码项：`POST /api/ciphers/create`、`GET /api/ciphers/{id}`、`PUT /api/ciphers/{id}`、`PUT /api/ciphers/{id}/partial`、`PUT /api/ciphers/{id}/delete`
 - 文件夹：`POST /api/folders`、`PUT /api/folders/{id}`、`DELETE /api/folders/{id}`
-- 2FA：`GET /api/two-factor`、`/api/two-factor/authenticator/*`
+- 2FA：`GET /api/two-factor`、`/api/two-factor/authenticator/*`、`/api/two-factor/webauthn`、`/api/two-factor/get-webauthn*`
+- 通行密钥：`GET /identity/accounts/webauthn/assertion-options`、`GET|POST|PUT /api/webauthn`、`POST /api/webauthn/attestation-options`
 - 官方安卓设备探测：`GET /api/devices/knowndevice`
 
 ## 完整 Cloudflare 部署流程
@@ -114,6 +116,16 @@ openssl rand -base64 32
 | `TWO_FACTOR_ENC_KEY` | 启用 TOTP 前 | 建议首次部署前配置，避免后续更换加密方式 |
 | `BACKUP_ENC_KEY` | 使用 WebDAV 备份前 | 32 字节 base64 密钥，加密备份文件与 WebDAV 密码；未配置时备份功能不可用 |
 | `TWO_FACTOR_REMEMBER_DAYS` | 可选 | remember-device（provider=5）记住登录的有效天数，取值 1 到 90，未设置时按 30 天，与上游 `TWO_FACTOR_REMEMBER_DAYS` 同名同义 |
+| `WEBAUTHN_RP_ID` | 可选 | 通行密钥的 RP ID，默认为当前请求域名；当 Worker 通过自定义域访问而通行密钥需要绑定根域时手动指定 |
+| `WEBAUTHN_ORIGIN` | 可选 | 校验 `clientData.origin` 的完整 origin（含协议和端口），默认为当前请求的 origin；前后端同域时通常无需设置 |
+
+通行密钥说明：
+
+- 注册和登录都要求验证器支持 ES256（P-256），并会校验 RP ID、origin、用户存在/验证标志和签名计数器。
+- 通行密钥登录要求使用可发现凭据（discoverable credential / resident key），因此注册时会要求 `residentKey=required`；仅支持非驻留凭据的安全密钥只能用于二步验证。
+- 目前不支持 PRF：密钥列表中的 `PrfStatus` 固定为 2（Unsupported），因此「使用通行密钥解锁密码库」不可用，但通行密钥登录和二步验证不受影响。
+- `workers.dev` 域名的 RP ID 是 `*.workers.dev` 的子域，部分平台（尤其 iOS/macOS）要求 RP ID 与可注册域后缀匹配。如果遇到注册失败，请绑定自定义域并设置 `WEBAUTHN_RP_ID` 与 `WEBAUTHN_ORIGIN`。
+- WebAuthn 表由 Worker 运行时自动创建；已有部署无需手动迁移。二步验证密钥（TOTP）仍只使用 `TWO_FACTOR_ENC_KEY`，WebAuthn 公钥和挑战不经过该密钥加密。
 
 已有部署不需要额外的迁移步骤：Worker 会在首次使用 remember-device 时自动为 `devices` 表补上 `remember_expires_at` 列（与 `remember_token_hash` 相同的处理方式），全新安装则由 `sql/schema_full.sql` 建表时带上该列。改动之前签发的 remember token 没有记录过期时间，会被视为已过期：相关设备下一次登录需要重新输入一次 TOTP，之后按新的有效期记住。
 
@@ -180,7 +192,7 @@ curl -f https://你的域名/api/version
 curl -f https://你的域名/api/config
 ```
 
-还应验证 `/demo.html`、`/admin`、`/admin.html`、新旧账号登录、refresh token、同步、文本/文件 Send、TOTP 和 Android remember-device。
+还应验证 `/demo.html`、`/admin`、`/admin.html`、新旧账号登录、refresh token、同步、文本/文件 Send、TOTP、Android remember-device，以及通行密钥注册/登录和 WebAuthn 二步验证。
 
 ### 8. GitHub Actions 自动部署
 
@@ -193,6 +205,9 @@ curl -f https://你的域名/api/config
 3. 在 GitHub `Settings → Environments` 创建 `test`、`production`。生产环境建议设置 Required reviewers。
 4. 每个 Environment 的 **Variables** 配置：`WORKER_NAME`（默认生产 `warden-worker`、测试 `warden-worker-test`）、`D1_DATABASE_NAME`、`D1_DATABASE_ID`、`ADMIN_EMAIL`、`SIGNUPS_ALLOWED`、`BASE_URL`。
 5. 每个 Environment 的 **Secrets** 配置：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`WORKER_JWT_SECRET`、`WORKER_JWT_REFRESH_SECRET`、`WORKER_TWO_FACTOR_ENC_KEY`；如需 WebDAV 备份，再配置 `WORKER_BACKUP_ENC_KEY`（可选，未配置时部署不会失败，但备份功能保持禁用）。
+
+> [!IMPORTANT]
+> **请务必把 `WORKER_BACKUP_ENC_KEY` 和 `WORKER_TWO_FACTOR_ENC_KEY` 写入 GitHub Environment Secrets，并另外离线保存一份。** 这两个密钥只以 write-only Secret 的形式存在于 GitHub 和 Worker 上，部署日志与仓库都不会保存明文。`WORKER_BACKUP_ENC_KEY` 丢失后旧备份和已保存的 WebDAV 密码无法解密；`WORKER_TWO_FACTOR_ENC_KEY` 丢失后已绑定的 TOTP 验证码会全部失效。不要为了“清理”而删除这两个 Secret，也不要在不同部署之间随意轮换。
 6. 第一次只对空数据库手动运行对应的 `Initialize ... D1`；workflow 会先只读检查核心表，检测到任意数据就直接退出，不执行 `sql/schema_full.sql`。该 SQL 仍可能清空表，已有数据禁止运行。
 7. 首次部署测试时，在 Actions 页面手动运行 `Deploy test` 并选择要验证的 ref；生产推送 `main` 或手动运行 `Deploy production`。
 8. 如使用自定义域，在 Worker 部署后到 Cloudflare `Workers → Settings → Domains & Routes → Add Custom Domain` 绑定，再把该 URL 写入 `BASE_URL`。
@@ -308,7 +323,7 @@ BACKUP_ENC_KEY=<base64-32-byte-key>
 
 ```bash
 wrangler d1 execute vault1 --remote --config wrangler.production.jsonc --command \
-  "DELETE FROM two_factor_authenticator; UPDATE users SET totp_recover = NULL; UPDATE devices SET remember_token_hash = NULL, remember_expires_at = NULL;"
+  "DELETE FROM two_factor_authenticator; DELETE FROM two_factor_webauthn; DELETE FROM webauthn_challenges; UPDATE users SET totp_recover = NULL; UPDATE devices SET remember_token_hash = NULL, remember_expires_at = NULL;"
 ```
 
 跨部署恢复时请保证 `TWO_FACTOR_ENC_KEY` 与备份来源一致，或提前勾选清除，可避免此问题。
