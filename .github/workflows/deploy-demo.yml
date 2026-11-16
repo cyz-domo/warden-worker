@@ -100,11 +100,11 @@ jobs:
               continue
             fi
             echo "DB $name ($id)"
-            sql="SELECT u.id AS user_id, u.email, u.created_at AS user_created, w.id AS credential_row, w.name AS credential_name, w.prf_status, w.encrypted_user_key IS NOT NULL AS has_user_key, w.encrypted_public_key IS NOT NULL AS has_public_key, w.encrypted_private_key IS NOT NULL AS has_private_key, w.created_at AS credential_created FROM users u LEFT JOIN webauthn_credentials w ON w.user_id = u.id WHERE lower(u.email) = lower(?1)"
-            jq -n --arg sql "$sql" --arg email "$email" '{sql: $sql, params: [$email]}' \
-              | curl -sf -X POST -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+            sql="SELECT u.id AS user_id, u.email, u.created_at AS user_created, w.id AS credential_row, w.name AS credential_name, w.prf_status, w.encrypted_user_key IS NOT NULL AS has_user_key, w.encrypted_public_key IS NOT NULL AS has_public_key, w.encrypted_private_key IS NOT NULL AS has_private_key, w.created_at AS credential_created FROM users u LEFT JOIN webauthn_credentials w ON w.user_id = u.id WHERE lower(u.email) = '$email'"
+            jq -n --arg sql "$sql" '{sql: $sql}' \
+              | curl -s -X POST -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
                   --data @- "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database/$id/query" \
-              | jq -c '.result[0].results // .errors'
+              | jq -c '.result[0].results // .errors // .'
           done
       - name: Initialize demo database if empty
         env:
