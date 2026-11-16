@@ -232,6 +232,26 @@ Copilot 收到任务后会分析摘要 PR，只把适用于 Cloudflare Worker �
 - 限制：明文 JSON 16 MiB、总行数 20000、单文件 64 MiB。超过限制请改用 `wrangler d1 export` 在本地备份；恢复前请确认远程目录中已有完整备份。
 - `BACKUP_ENC_KEY` 丢失后无法解密旧备份或已保存的 WebDAV 密码，请备份并妥善保管该密钥，不要随意轮换。
 - 备份内含 TOTP 密钥与用户数据；跨部署恢复时需要同时使用相同的 `BACKUP_ENC_KEY` 和 `TWO_FACTOR_ENC_KEY`，否则备份无法解密或 TOTP 无法继续使用。
+- 恢复入口：后台对应通道行点「文件」，在远程备份列表中点「恢复」，需要二次确认。
+
+### 9.2 在全新 Worker/D1 上恢复
+
+备份文件与 Worker 实例无关，只要手里有 `warden-*.enc` 和原来的 `BACKUP_ENC_KEY`，就可以在一个全新的 Worker + D1 上把数据恢复出来：
+
+1. 新建 D1，并初始化空库：已有数据库执行 `wrangler d1 migrations apply`，全新空库可执行 `sql/schema_full.sql`。
+2. 配置运行时 Secrets：`BACKUP_ENC_KEY` 和 `TWO_FACTOR_ENC_KEY` 必须与备份时一致；`JWT_SECRET`/`JWT_REFRESH_SECRET` 可以是新值（旧会话本来就会失效）；`ADMIN_EMAIL` 保持备份中的管理员邮箱。
+3. 临时设置 `SIGNUPS_ALLOWED=true` 并部署，然后用该管理员邮箱注册一个临时账号并登录 `/admin`——恢复 API 要求管理员 Bearer token，空库需要这个跳板账号。
+4. 在「加密备份（WebDAV）」中重新添加一个指向原备份目录的通道（通道配置不在备份内），点「测试」确认连接正常。
+5. 点该通道的「文件」，选择目标 `warden-*.enc` 并「恢复」。恢复会先上传 `warden-pre-restore-*.enc` 快照，再整体覆盖数据表；完成后所有会话失效。
+6. 用备份时的原始账号重新登录，确认密码项、文件夹、Send、设备、TOTP 状态和注册白名单均已恢复；最后把 `SIGNUPS_ALLOWED` 改回 `false`。
+
+注意事项：
+
+- 恢复只覆盖 `users`、`folders`、`ciphers`、`sends`、`send_files`、`send_file_chunks`、`two_factor_authenticator`、`devices`、`registration_allowlist`；不包含 `backup_channels`、`backup_runs`、`backup_locks`，新实例中刚添加的 WebDAV 通道会保留，可继续用于定时备份。
+- 空库里临时注册的管理员账号会在恢复时被备份中的原始用户数据替换，因此请确认记得原始账号的主密码。
+- 如果旧实例仍然在线且指向同一个 WebDAV 目录，恢复本身不受影响，但两边的定时任务可能互相清理旧文件；切换完成后请关闭旧实例的通道或停用旧 Worker。
+- 如果还能拿到旧实例的管理员 access token，也可以跳过临时注册，直接调用 `POST /api/admin/backup-channels/{id}/restore`（body 为 `{"file":"warden-....enc","confirm":true}`）。
+- 请使用当前或更新版本的 Worker 恢复旧备份；如果备份文件缺少当前代码期望的列，恢复会明确报错而不会写入不完整数据。
 
 ### 10. 本地开发
 
