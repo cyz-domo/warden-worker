@@ -93,6 +93,8 @@ pub struct TokenRequest {
     token: Option<String>,
     #[serde(rename = "deviceResponse", alias = "device_response", default)]
     device_response: Option<String>,
+    #[serde(rename = "authRequest", alias = "auth_request")]
+    auth_request: Option<String>,
 }
 
 fn js_opt_string(v: Option<String>) -> JsValue {
@@ -624,8 +626,26 @@ pub async fn token(
                 return Ok(invalid_grant_response("Invalid credentials"));
             };
             let user: User = serde_json::from_value(user).map_err(|_| AppError::Internal)?;
-            // Securely compare the provided hash with the stored hash
-            if !constant_time_eq(
+            let auth_request_id = payload
+                .auth_request
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            if let Some(auth_request_id) = auth_request_id.as_deref() {
+                let ip = crate::handlers::auth_requests::client_ip(&headers);
+                if !crate::handlers::auth_requests::verify_login(
+                    &db,
+                    auth_request_id,
+                    &user.id,
+                    &ip,
+                    &password_hash,
+                )
+                .await?
+                {
+                    return Ok(invalid_grant_response("Invalid credentials"));
+                }
+            } else if !constant_time_eq(
                 user.master_password_hash.as_bytes(),
                 password_hash.as_bytes(),
             ) {
@@ -816,6 +836,14 @@ pub async fn token(
                     two_factor::clear_all_two_factor_state(&db, &user.id).await?;
                 } else {
                     return Ok(two_factor_required_response(&db, &env, &headers, &user.id).await);
+                }
+            }
+
+            if let Some(auth_request_id) = auth_request_id.as_deref() {
+                // Like upstream, an auth request can be used for one login only.
+                // Mark it after two-factor so a failed 2FA prompt does not consume it.
+                if !crate::handlers::auth_requests::consume(&db, auth_request_id, &user.id).await? {
+                    return Ok(invalid_grant_response("Invalid credentials"));
                 }
             }
 

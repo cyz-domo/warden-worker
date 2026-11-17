@@ -14,8 +14,8 @@ use crate::{
     auth::Claims,
     error::AppError,
     handlers::{
-        accounts, admin, backup, ciphers, config, devices, folders, identity, import, sends, sync,
-        two_factor, usage, webauthn,
+        accounts, admin, auth_requests, backup, ciphers, config, devices, folders, identity,
+        import, sends, sync, two_factor, usage, webauthn,
     },
 };
 
@@ -71,6 +71,22 @@ pub fn api_router(env: Env) -> Router {
         .route("/api/accounts", delete(accounts::delete_account))
         .route("/api/accounts/delete", post(accounts::delete_account_post))
         .route("/api/devices", get(devices::get_devices))
+        .route(
+            "/api/auth-requests",
+            post(auth_requests::create).get(auth_requests::list_pending),
+        )
+        .route(
+            "/api/auth-requests/pending",
+            get(auth_requests::list_pending),
+        )
+        .route(
+            "/api/auth-requests/{id}",
+            get(auth_requests::get).put(auth_requests::respond),
+        )
+        .route(
+            "/api/auth-requests/{id}/response",
+            get(auth_requests::response),
+        )
         .route(
             "/api/devices/identifier/{id}",
             get(devices::get_device_by_identifier),

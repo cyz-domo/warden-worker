@@ -97,6 +97,9 @@ jobs:
           # Idempotent, so existing demo databases also gain the WebAuthn tables.
           wrangler d1 execute vault1 --remote --config wrangler.demo.jsonc \
             --file sql/migrations/20261116_add_webauthn.sql
+          # Idempotent, so existing demo databases also gain the auth request table.
+          wrangler d1 execute vault1 --remote --config wrangler.demo.jsonc \
+            --file sql/migrations/20261117_add_auth_requests.sql
       - name: Clear demo two-factor state
         if: ${{ inputs.clear_two_factor }}
         env:

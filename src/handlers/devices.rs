@@ -8,9 +8,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 use worker::{wasm_bindgen::JsValue, Env};
 
+use crate::handlers::auth_requests;
 use crate::{auth::Claims, db, error::AppError};
 
-async fn ensure_devices_table(db: &worker::D1Database) -> Result<(), AppError> {
+pub(crate) async fn ensure_devices_table(db: &worker::D1Database) -> Result<(), AppError> {
     db.prepare(
         "CREATE TABLE IF NOT EXISTS devices (
             id TEXT PRIMARY KEY NOT NULL,
@@ -217,12 +218,13 @@ pub async fn get_devices(
              WHERE user_id = ?1
              ORDER BY updated_at DESC",
         )
-        .bind(&[claims.sub.into()])?
+        .bind(&[claims.sub.clone().into()])?
         .all()
         .await
         .map_err(|_| AppError::Database)?
         .results()?;
 
+    let pending = auth_requests::pending_by_device(&db, &claims.sub).await?;
     let data = rows
         .into_iter()
         .map(|row| {
@@ -256,6 +258,7 @@ pub async fn get_devices(
                 .get("remember_token_hash")
                 .and_then(|v| v.as_str())
                 .is_some();
+            let pending_auth_request = pending.get(&identifier).cloned().unwrap_or(Value::Null);
 
             json!({
                 "id": id,
@@ -266,6 +269,7 @@ pub async fn get_devices(
                 "revisionDate": updated_at,
                 "lastSeenDate": updated_at,
                 "isTrusted": trusted,
+                "devicePendingAuthRequest": pending_auth_request,
                 "object": "device"
             })
         })
@@ -395,6 +399,8 @@ pub async fn get_device_by_identifier(
         .get("remember_token_hash")
         .and_then(|v| v.as_str())
         .is_some();
+    let pending = auth_requests::pending_by_device(&db, &claims.sub).await?;
+    let pending_auth_request = pending.get(&identifier).cloned().unwrap_or(Value::Null);
 
     Ok(Json(json!({
         "id": row_id,
@@ -405,6 +411,7 @@ pub async fn get_device_by_identifier(
         "revisionDate": updated_at,
         "lastSeenDate": updated_at,
         "isTrusted": trusted,
+        "devicePendingAuthRequest": pending_auth_request,
         "object": "device"
     })))
 }

@@ -19,6 +19,7 @@ Warden Worker 是一个运行在 Cloudflare Workers 上的轻量级 Bitwarden �
 - 兼容多端：官方 Bitwarden（浏览器扩展 / 桌面 / 安卓）与多数第三方客户端
 - 核心能力：注册/登录、同步、密码项（Cipher）增删改、文件夹、TOTP（Authenticator）二步验证
 - 通行密钥（WebAuthn/Passkey）：支持使用通行密钥登录，以及把安全密钥作为二步验证（twoFactorProvider=7）
+- 设备批准登录（Log in with device）：已登录的 App/扩展可手动批准新设备登录，无需输入主密码（仍需通过已启用的二步验证）
 - 官方安卓兼容：支持 `/api/devices/knowndevice` 与 remember-device（twoFactorProvider=5）流程
 
 ## 客户端使用建议
@@ -35,7 +36,21 @@ Warden Worker 是一个运行在 Cloudflare Workers 上的轻量级 Bitwarden �
 - 文件夹：`POST /api/folders`、`PUT /api/folders/{id}`、`DELETE /api/folders/{id}`
 - 2FA：`GET /api/two-factor`、`/api/two-factor/authenticator/*`、`/api/two-factor/webauthn`、`/api/two-factor/get-webauthn*`、`PUT /api/two-factor/disable`
 - 通行密钥：`GET /identity/accounts/webauthn/assertion-options`、`GET|POST|PUT /api/webauthn`、`POST /api/webauthn/attestation-options`
+- 设备批准登录：`POST /api/auth-requests`、`GET /api/auth-requests/pending`、`GET|PUT /api/auth-requests/{id}`、`GET /api/auth-requests/{id}/response`
 - 官方安卓设备探测：`GET /api/devices/knowndevice`
+
+### 设备批准登录（Log in with device）
+
+客户端在登录页选择「使用设备登录」后会调用 `POST /api/auth-requests` 创建请求，并轮询 `/api/auth-requests/{id}/response?code=...`（约 2 分钟）。已登录的设备在「设备」页面（移动端为「待处理的登录请求」）看到请求后批准或拒绝；批准时由已登录设备用请求中的公钥加密用户密钥，再随请求写回。批准完成后，发起登录的客户端用 `grant_type=password` + `authRequest=<id>` + `password=<访问码>` 换取 token（`/identity/connect/token`）。
+
+行为与限制：
+
+- 发起请求的设备必须已在目标账户登录过（`devices` 表中存在且 `device-type` 匹配），类似上游 Vaultwarden；完全陌生的设备不能直接发起。
+- 本实现只支持**手动审批**：没有 WebSocket 通知，也没有 Bitwarden 官方推送中继。审批方需要自己打开设备/待处理页面，发起方靠轮询获取结果，不会像官方服务那样立即弹出系统通知。
+- 二步验证仍然生效。批准只替代主密码校验；如果账户启用了 2FA，发起登录的客户端仍需完成 2FA，之后该请求才会被标记为已使用。
+- 访问码只保存 SHA-256 哈希；请求 15 分钟过期，登录必须在请求创建后 5 分钟内完成，并且绑定发起方的 IP 与设备类型。网络切换（例如手机 Wi-Fi/蜂窝切换）可能导致校验失败，重新发起即可。
+- 请求为一次性使用；已批准/已拒绝/已登录的请求不能复用。拒绝会立即删除请求。
+- 客户端兼容性依赖官方 Bitwarden 客户端内建的流程，Web Vault 无需改动；若某个客户端版本看不到入口，请升级客户端。全程需要 HTTPS，且 `BASE_URL`/`WEBAUTHN_ORIGIN` 与实际访问域名保持一致。
 
 ## 完整 Cloudflare 部署流程
 

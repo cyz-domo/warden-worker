@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod admin;
+pub mod auth_requests;
 pub mod backup;
 pub mod ciphers;
 pub mod config;
