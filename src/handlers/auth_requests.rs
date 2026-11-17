@@ -13,7 +13,6 @@ use worker::{wasm_bindgen::JsValue, Env};
 use crate::auth::Claims;
 use crate::db;
 use crate::error::AppError;
-use crate::handlers::devices;
 use crate::webauthn;
 
 const REQUEST_TTL_SECS: i64 = 15 * 60;
@@ -289,7 +288,6 @@ pub async fn create(
 
     let db = db::get_db(&env)?;
     ensure_tables(&db).await?;
-    devices::ensure_devices_table(&db).await?;
     purge_expired(&db).await?;
 
     let user_id: Option<String> = db
@@ -302,25 +300,10 @@ pub async fn create(
         return Err(AppError::NotFound("User not found".to_string()));
     };
 
+    // Any device may request approval. Unknown devices stay visible to the
+    // approving user because the Devices API merges pending requests in as
+    // temporary device entries; no push/websocket is available here.
     let device_type = request_device_type(&headers);
-    let device: Option<Value> = db
-        .prepare(
-            "SELECT device_type FROM devices WHERE user_id = ?1 AND device_identifier = ?2 LIMIT 1",
-        )
-        .bind(&[user_id.clone().into(), device_identifier.clone().into()])?
-        .first(None)
-        .await
-        .map_err(|_| AppError::Database)?;
-    let Some(device) = device else {
-        return Err(AppError::BadRequest(
-            "Device is not recognized for this account".to_string(),
-        ));
-    };
-    if let Some(stored_type) = device.get("device_type").and_then(Value::as_i64) {
-        if stored_type != device_type {
-            return Err(AppError::BadRequest("Device type mismatch".to_string()));
-        }
-    }
 
     db.prepare(
         "DELETE FROM auth_requests
@@ -617,17 +600,33 @@ pub async fn consume(db: &worker::D1Database, id: &str, user_id: &str) -> Result
         == 1)
 }
 
+#[derive(Debug, Clone)]
+pub struct PendingAuthRequest {
+    pub id: String,
+    pub creation_date: String,
+    pub device_type: i64,
+}
+
+impl PendingAuthRequest {
+    pub fn to_device_json(&self) -> Value {
+        json!({
+            "id": &self.id,
+            "creationDate": &self.creation_date
+        })
+    }
+}
+
 /// Pending auth requests keyed by requesting device identifier, for the Devices view.
 pub async fn pending_by_device(
     db: &worker::D1Database,
     user_id: &str,
-) -> Result<HashMap<String, Value>, AppError> {
+) -> Result<HashMap<String, PendingAuthRequest>, AppError> {
     ensure_tables(db).await?;
     purge_expired(db).await?;
     let cutoff = Utc::now().timestamp() - REQUEST_TTL_SECS;
     let rows = db
         .prepare(
-            "SELECT id, request_device_identifier, created_at
+            "SELECT id, request_device_identifier, device_type, created_at
              FROM auth_requests
              WHERE user_id = ?1 AND approved IS NULL AND created_at_epoch >= ?2
              ORDER BY created_at_epoch DESC",
@@ -650,12 +649,13 @@ pub async fn pending_by_device(
         let Some(created_at) = row.get("created_at").and_then(Value::as_str) else {
             continue;
         };
-        pending.entry(identifier.to_string()).or_insert_with(|| {
-            json!({
-                "id": id,
-                "creationDate": created_at
-            })
-        });
+        pending
+            .entry(identifier.to_string())
+            .or_insert_with(|| PendingAuthRequest {
+                id: id.to_string(),
+                creation_date: created_at.to_string(),
+                device_type: row.get("device_type").and_then(Value::as_i64).unwrap_or(14),
+            });
     }
     Ok(pending)
 }

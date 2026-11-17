@@ -4,6 +4,7 @@ use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 use worker::{wasm_bindgen::JsValue, Env};
@@ -225,55 +226,85 @@ pub async fn get_devices(
         .results()?;
 
     let pending = auth_requests::pending_by_device(&db, &claims.sub).await?;
-    let data = rows
-        .into_iter()
-        .map(|row| {
-            let id = row
-                .get("id")
+    let known: HashSet<String> = rows
+        .iter()
+        .filter_map(|row| {
+            row.get("device_identifier")
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let identifier = row
-                .get("device_identifier")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let name = row
-                .get("device_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let device_type = row.get("device_type").and_then(|v| v.as_i64()).unwrap_or(0);
-            let created_at = row
-                .get("created_at")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let updated_at = row
-                .get("updated_at")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let trusted = row
-                .get("remember_token_hash")
-                .and_then(|v| v.as_str())
-                .is_some();
-            let pending_auth_request = pending.get(&identifier).cloned().unwrap_or(Value::Null);
-
-            json!({
-                "id": id,
-                "name": name,
-                "identifier": identifier,
-                "type": device_type,
-                "creationDate": created_at,
-                "revisionDate": updated_at,
-                "lastSeenDate": updated_at,
-                "isTrusted": trusted,
-                "devicePendingAuthRequest": pending_auth_request,
-                "object": "device"
-            })
+                .map(str::to_string)
         })
-        .collect::<Vec<_>>();
+        .collect();
+
+    // Devices that never logged in have no row yet. Surface their pending
+    // request as a temporary device so the approval UI can show it.
+    let mut data = Vec::new();
+    for (identifier, request) in &pending {
+        if known.contains(identifier) {
+            continue;
+        }
+        data.push(json!({
+            "id": &request.id,
+            "name": "",
+            "identifier": identifier,
+            "type": request.device_type,
+            "creationDate": &request.creation_date,
+            "revisionDate": &request.creation_date,
+            "lastSeenDate": &request.creation_date,
+            "isTrusted": false,
+            "devicePendingAuthRequest": request.to_device_json(),
+            "object": "device"
+        }));
+    }
+
+    data.extend(rows.into_iter().map(|row| {
+        let id = row
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let identifier = row
+            .get("device_identifier")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let name = row
+            .get("device_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let device_type = row.get("device_type").and_then(|v| v.as_i64()).unwrap_or(0);
+        let created_at = row
+            .get("created_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let updated_at = row
+            .get("updated_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let trusted = row
+            .get("remember_token_hash")
+            .and_then(|v| v.as_str())
+            .is_some();
+        let pending_auth_request = pending
+            .get(&identifier)
+            .map(auth_requests::PendingAuthRequest::to_device_json)
+            .unwrap_or(Value::Null);
+
+        json!({
+            "id": id,
+            "name": name,
+            "identifier": identifier,
+            "type": device_type,
+            "creationDate": created_at,
+            "revisionDate": updated_at,
+            "lastSeenDate": updated_at,
+            "isTrusted": trusted,
+            "devicePendingAuthRequest": pending_auth_request,
+            "object": "device"
+        })
+    }));
 
     Ok(Json(json!({
         "data": data,
@@ -400,7 +431,10 @@ pub async fn get_device_by_identifier(
         .and_then(|v| v.as_str())
         .is_some();
     let pending = auth_requests::pending_by_device(&db, &claims.sub).await?;
-    let pending_auth_request = pending.get(&identifier).cloned().unwrap_or(Value::Null);
+    let pending_auth_request = pending
+        .get(&identifier)
+        .map(auth_requests::PendingAuthRequest::to_device_json)
+        .unwrap_or(Value::Null);
 
     Ok(Json(json!({
         "id": row_id,
